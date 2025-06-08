@@ -1,11 +1,14 @@
 package gui
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/artnikel/nuclei/internal/scanner"
+	"github.com/artnikel/nuclei/internal/templates"
 )
 
 func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
@@ -64,7 +68,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	timeoutEntry.SetText("5")
 
 	statsBinding := binding.NewString()
-	_ = statsBinding.Set("Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0")
+	_ = statsBinding.Set("Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\nAvg time (ms): 0")
 	statsLabel := widget.NewLabelWithData(statsBinding)
 
 	startBtn := widget.NewButton("Start", nil)
@@ -96,6 +100,32 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 			dialog.ShowError(fmt.Errorf("templates folder not selected"), w)
 			return
 		}
+		file, err := os.Open(targetsFile)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to open targets file: %w", err), w)
+			return
+		}
+		defer file.Close()
+
+		bufScanner := bufio.NewScanner(file)
+		var firstTarget string
+		if bufScanner.Scan() {
+			firstTarget = bufScanner.Text()
+		}
+		if firstTarget == "" {
+			dialog.ShowError(fmt.Errorf("no targets found in file"), w)
+			return
+		}
+		if !strings.HasPrefix(firstTarget, "http://") && !strings.HasPrefix(firstTarget, "https://") {
+			firstTarget = "http://" + firstTarget
+		}
+
+		loadedTemplate, err := templates.FindFirstTemplate(firstTarget, templatesDir)
+
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to load template: %w", err), w)
+			return
+		}
 
 		isRunning.Store(true)
 		startBtn.Disable()
@@ -125,50 +155,58 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 			var totalTargets int64 = 0
 			var processed int64 = 0
 			var success int64 = 0
+			var errors int64 = 0
+			var totalDuration int64 = 0
 
-			targetsChan, errChan := scanner.ReadTargets(ctx, targetsFile)
+			targetsChan := make(chan string, 1000)
 
 			go func() {
-				for err := range errChan {
-					if err != nil {
-						log.Println("Error reading targets:", err)
-					}
+				file, err := os.Open(targetsFile)
+				if err != nil {
+					log.Printf("Error opening targets file %s: %v\n", targetsFile, err)
+					close(targetsChan)
+					return
 				}
-			}()
 
-			var targetList []string
-			for t := range targetsChan {
-				targetList = append(targetList, t)
-			}
-			totalTargets = int64(len(targetList))
+				defer file.Close()
 
-			newTargetsChan := make(chan string, totalTargets)
-			go func() {
-				defer close(newTargetsChan)
-				for _, t := range targetList {
+				bufScanner := bufio.NewScanner(file)
+				for bufScanner.Scan() {
 					select {
 					case <-ctx.Done():
+						close(targetsChan)
 						return
-					case newTargetsChan <- t:
+					default:
+						target := bufScanner.Text()
+						atomic.AddInt64(&totalTargets, 1)
+						targetsChan <- target
 					}
 				}
+				if err := bufScanner.Err(); err != nil {
+					log.Println("Error reading targets:", err)
+				}
+				close(targetsChan)
 			}()
 
-			processFn := func(ctx context.Context, target string) error {
-				time.Sleep(time.Duration(timeoutSec) * time.Second)
-				return nil
-			}
-
 			wrappedProcessFn := func(ctx context.Context, target string) error {
-				err := processFn(ctx, target)
+				startTime := time.Now()
+				err := scanner.ProcessTarget(ctx, target, loadedTemplate, timeoutSec)
+				durationMs := time.Since(startTime).Milliseconds()
+
 				atomic.AddInt64(&processed, 1)
+				atomic.AddInt64(&totalDuration, durationMs)
+
 				if err == nil {
 					atomic.AddInt64(&success, 1)
+				} else {
+					log.Printf("Error processing target %s: %v\n", target, err)
+					atomic.AddInt64(&errors, 1)
 				}
+
 				return err
 			}
 
-			resultsDone := scanner.StartWorkers(ctx, newTargetsChan, threads, wrappedProcessFn)
+			resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, wrappedProcessFn)
 
 			ticker := time.NewTicker(300 * time.Millisecond)
 			defer ticker.Stop()
@@ -181,20 +219,44 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 				case <-resultsDone:
 					break loop
 				case <-ticker.C:
+					processedCount := atomic.LoadInt64(&processed)
+					totalDurationMs := atomic.LoadInt64(&totalDuration)
+					avgDuration := float64(0)
+					if processedCount > 0 {
+						avgDuration = float64(totalDurationMs) / float64(processedCount)
+					}
+					errorsCount := atomic.LoadInt64(&errors)
+					successCount := atomic.LoadInt64(&success)
+					totalCount := atomic.LoadInt64(&totalTargets)
+
 					statsUpdateCh <- fmt.Sprintf(
-						"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
-						atomic.LoadInt64(&totalTargets),
-						atomic.LoadInt64(&processed),
-						atomic.LoadInt64(&success),
+						"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %.2f",
+						totalCount,
+						processedCount,
+						successCount,
+						errorsCount,
+						avgDuration,
 					)
 				}
 			}
 
+			processedCount := atomic.LoadInt64(&processed)
+			totalDurationMs := atomic.LoadInt64(&totalDuration)
+			avgDuration := float64(0)
+			if processedCount > 0 {
+				avgDuration = float64(totalDurationMs) / float64(processedCount)
+			}
+			errorsCount := atomic.LoadInt64(&errors)
+			successCount := atomic.LoadInt64(&success)
+			totalCount := atomic.LoadInt64(&totalTargets)
+
 			statsUpdateCh <- fmt.Sprintf(
-				"Scan finished.\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
-				totalTargets,
-				atomic.LoadInt64(&processed),
-				atomic.LoadInt64(&success),
+				"Scan finished.\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %.2f",
+				totalCount,
+				processedCount,
+				successCount,
+				errorsCount,
+				avgDuration,
 			)
 		}()
 	}

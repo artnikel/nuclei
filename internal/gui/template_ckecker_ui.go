@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -72,6 +73,10 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.Canv
 			return
 		}
 		tpl := templates.GenerateTemplate(url)
+		if strings.HasPrefix(tpl, "# Failed") {
+			dialog.ShowError(fmt.Errorf("template generation failed:\n%s", tpl), parentWindow)
+			return
+		}
 
 		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil || writer == nil {

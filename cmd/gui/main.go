@@ -21,6 +21,6 @@ func main() {
 	)
 
 	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(600, 450))
+	w.Resize(fyne.NewSize(600, 500))
 	w.ShowAndRun()
 }

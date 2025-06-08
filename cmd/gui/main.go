@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
@@ -19,7 +21,7 @@ import (
 )
 
 func main() {
-	a := app.New()
+	a := app.NewWithID("com.artnikel.nuclei")
 	w := a.NewWindow("Nuclei 3.0 GUI Scanner")
 
 	var targetsFile string
@@ -51,13 +53,21 @@ func main() {
 		fd.Show()
 	})
 
-	threadsEntry := widget.NewEntry()
-	threadsEntry.SetText("10")
+	maxThreads := runtime.NumCPU()
+
+	options := []string{}
+	for i := 1; i <= maxThreads; i++ {
+		options = append(options, strconv.Itoa(i))
+	}
+	threadsSelect := widget.NewSelect(options, nil)
+	threadsSelect.SetSelected(strconv.Itoa(maxThreads))
 
 	timeoutEntry := widget.NewEntry()
 	timeoutEntry.SetText("5")
 
-	statsLabel := widget.NewLabel("Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0")
+	statsBinding := binding.NewString()
+	_ = statsBinding.Set("Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0")
+	statsLabel := widget.NewLabelWithData(statsBinding)
 
 	startBtn := widget.NewButton("Start", nil)
 	stopBtn := widget.NewButton("Stop", nil)
@@ -65,13 +75,15 @@ func main() {
 
 	var isRunning atomic.Bool
 
+	var cancelScan context.CancelFunc
+
 	startBtn.OnTapped = func() {
 		if isRunning.Load() {
 			dialog.ShowInformation("Scanner running", "Scanner is already running", w)
 			return
 		}
 
-		threads, err1 := strconv.Atoi(threadsEntry.Text)
+		threads, err1 := strconv.Atoi(threadsSelect.Selected)
 		timeoutSec, err2 := strconv.Atoi(timeoutEntry.Text)
 
 		if err1 != nil || threads <= 0 {
@@ -96,12 +108,24 @@ func main() {
 		stopBtn.Enable()
 
 		ctx, cancel := context.WithCancel(context.Background())
+		cancelScan = cancel
+
+		statsUpdateCh := make(chan string, 10)
+
+		go func() {
+			for update := range statsUpdateCh {
+				_ = statsBinding.Set(update)
+			}
+		}()
 
 		go func() {
 			defer func() {
-				isRunning.Store(false)
-				startBtn.Enable()
-				stopBtn.Disable()
+				close(statsUpdateCh)
+				a.Driver().DoFromGoroutine(func() {
+					isRunning.Store(false)
+					startBtn.Enable()
+					stopBtn.Disable()
+				}, true)
 			}()
 
 			var totalTargets int64 = 0
@@ -118,8 +142,27 @@ func main() {
 				}
 			}()
 
+			var targetList []string
+			for t := range targetsChan {
+				targetList = append(targetList, t)
+			}
+			totalTargets = int64(len(targetList))
+
+			newTargetsChan := make(chan string, totalTargets)
+			go func() {
+				defer close(newTargetsChan)
+				for _, t := range targetList {
+					select {
+					case <-ctx.Done():
+						return
+					case newTargetsChan <- t:
+					}
+				}
+			}()
+
 			processFn := func(ctx context.Context, target string) error {
-				time.Sleep(50 * time.Millisecond)
+				// target handling logic
+				time.Sleep(time.Duration(timeoutSec) * time.Second)
 				return nil
 			}
 
@@ -132,15 +175,7 @@ func main() {
 				return err
 			}
 
-			go func() {
-				for range targetsChan {
-					atomic.AddInt64(&totalTargets, 1)
-				}
-			}()
-
-			targetsChan, _ = scanner.ReadTargets(ctx, targetsFile)
-
-			resultsCh := scanner.StartWorkers(ctx, targetsChan, threads, wrappedProcessFn)
+			resultsCh := scanner.StartWorkers(ctx, newTargetsChan, threads, wrappedProcessFn)
 
 			ticker := time.NewTicker(300 * time.Millisecond)
 			defer ticker.Stop()
@@ -155,31 +190,35 @@ func main() {
 						break loop
 					}
 				case <-ticker.C:
-					statsLabel.SetText(fmt.Sprintf("Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
-						atomic.LoadInt64(&totalTargets),
+					statsUpdateCh <- fmt.Sprintf(
+						"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
+						totalTargets,
 						atomic.LoadInt64(&processed),
-						atomic.LoadInt64(&success)))
+						atomic.LoadInt64(&success),
+					)
 				}
 			}
 
-			statsLabel.SetText(fmt.Sprintf("Scan finished.\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
-				atomic.LoadInt64(&totalTargets),
+			statsUpdateCh <- fmt.Sprintf(
+				"Scan finished.\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d",
+				totalTargets,
 				atomic.LoadInt64(&processed),
-				atomic.LoadInt64(&success)))
+				atomic.LoadInt64(&success),
+			)
 		}()
 
 		stopBtn.OnTapped = func() {
-			cancel()
+			if cancelScan != nil {
+				cancelScan()
+			}
 		}
 	}
-
-	stopBtn.OnTapped = func() {}
 
 	content := container.NewVBox(
 		selectTargetsBtn, targetsLabel,
 		selectTemplatesBtn, templatesLabel,
 		widget.NewForm(
-			widget.NewFormItem("Number of threads", threadsEntry),
+			widget.NewFormItem("Number of threads", threadsSelect),
 			widget.NewFormItem("Timeout (seconds)", timeoutEntry),
 		),
 		statsLabel,

@@ -7,17 +7,14 @@ import (
 
 type ProcessTargetFunc func(ctx context.Context, target string) error
 
-func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, processFn ProcessTargetFunc) <-chan int {
-	resultsCh := make(chan int)
+func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, processFn ProcessTargetFunc) <-chan struct{} {
+	doneCh := make(chan struct{})
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
 
-	var successCount int
-	var mu sync.Mutex
-
 	for i := 0; i < workers; i++ {
-		go func(workerID int) {
+		go func() {
 			defer wg.Done()
 			for {
 				select {
@@ -27,22 +24,16 @@ func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, pro
 					if !ok {
 						return
 					}
-					err := processFn(ctx, target)
-					if err == nil {
-						mu.Lock()
-						successCount++
-						mu.Unlock()
-					}
+					_ = processFn(ctx, target)
 				}
 			}
-		}(i)
+		}()
 	}
 
 	go func() {
 		wg.Wait()
-		resultsCh <- successCount
-		close(resultsCh)
+		close(doneCh)
 	}()
 
-	return resultsCh
+	return doneCh
 }

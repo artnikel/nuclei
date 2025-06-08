@@ -26,17 +26,41 @@ type Template struct {
 }
 
 func (t *Template) MatchesURL(u *url.URL) bool {
-	for _, req := range t.Requests {
-		for _, p := range req.Path {
-			cleanPath := strings.ReplaceAll(p, "{{BaseURL}}", "")
+    baseURL := u.Scheme + "://" + u.Host 
 
-			if strings.HasSuffix(u.Path, cleanPath) || strings.HasPrefix(u.Path, cleanPath) {
-				return true
-			}
-		}
-	}
-	return false
+    fullURL := u.String()
+
+    for _, req := range t.Requests {
+        for _, p := range req.Path {
+            candidate := strings.ReplaceAll(p, "{{BaseURL}}", baseURL)
+
+            if strings.HasPrefix(fullURL, candidate) {
+                return true
+            }
+
+            pathCandidate := candidate
+            if strings.HasPrefix(candidate, baseURL) {
+                pathCandidate = candidate[len(baseURL):]
+            }
+
+            if pathCandidate == "" {
+                pathCandidate = "/"
+            }
+
+            urlPath := u.Path
+            if urlPath == "" {
+                urlPath = "/"
+            }
+
+            if urlPath == pathCandidate || strings.HasPrefix(urlPath, pathCandidate) {
+                return true
+            }
+        }
+    }
+
+    return false
 }
+
 
 func FindMatchingTemplates(rawurl string, templatesDir string) ([]string, error) {
 	u, err := url.Parse(rawurl)

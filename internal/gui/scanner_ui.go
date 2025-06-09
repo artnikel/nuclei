@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,42 +35,15 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	targetsLabel := widget.NewLabel("Targets: (not selected)")
 	templatesLabel := widget.NewLabel("Templates: (not selected)")
 
-	selectTargetsBtn := widget.NewButton("Select targets.txt", func() {
-		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			targetsFile = reader.URI().Path()
-			targetsLabel.SetText("Targets: " + targetsFile)
-		}, w)
-		fd.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
-		fd.Show()
-	})
-
-	selectTemplatesBtn := widget.NewButton("Select templates folder", func() {
-		fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
-			if err != nil || uri == nil {
-				return
-			}
-			templatesDir = uri.Path()
-			templatesLabel.SetText("Templates: " + templatesDir)
-		}, w)
-		fd.Show()
-	})
+	selectTargetsBtn := newSelectTargetsButton(w, &targetsFile, targetsLabel)
+	selectTemplatesBtn := newSelectTemplatesButton(w, &templatesDir, templatesLabel)
 
 	maxThreads := runtime.NumCPU()
-	options := []string{}
-	for i := 1; i <= maxThreads; i++ {
-		options = append(options, strconv.Itoa(i))
-	}
-	threadsSelect := widget.NewSelect(options, nil)
-	threadsSelect.SetSelected(strconv.Itoa(maxThreads))
-
-	timeoutEntry := widget.NewEntry()
-	timeoutEntry.SetText("5")
+	threadsSelect := newThreadsSelect(maxThreads)
+	timeoutEntry := newTimeoutEntry()
 
 	statsBinding := binding.NewString()
-	_ = statsBinding.Set("Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\nAvg time (ms): 0")
+	_ = statsBinding.Set(initialStatsText())
 	statsLabel := widget.NewLabelWithData(statsBinding)
 
 	startBtn := widget.NewButton("Start", nil)
@@ -76,189 +51,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	stopBtn.Disable()
 
 	startBtn.OnTapped = func() {
-		if isRunning.Load() {
-			dialog.ShowInformation("Scanner running", "Scanner is already running", w)
-			return
-		}
-
-		threads, err1 := strconv.Atoi(threadsSelect.Selected)
-		timeoutSec, err2 := strconv.Atoi(timeoutEntry.Text)
-
-		if err1 != nil || threads <= 0 {
-			dialog.ShowError(fmt.Errorf("invalid thread count"), w)
-			return
-		}
-		if err2 != nil || timeoutSec <= 0 {
-			dialog.ShowError(fmt.Errorf("invalid timeout"), w)
-			return
-		}
-		if targetsFile == "" {
-			dialog.ShowError(fmt.Errorf("targets file not selected"), w)
-			return
-		}
-		if templatesDir == "" {
-			dialog.ShowError(fmt.Errorf("templates folder not selected"), w)
-			return
-		}
-		file, err := os.Open(targetsFile)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to open targets file: %w", err), w)
-			return
-		}
-		defer file.Close()
-
-		bufScanner := bufio.NewScanner(file)
-		var firstTarget string
-		if bufScanner.Scan() {
-			firstTarget = bufScanner.Text()
-		}
-		if firstTarget == "" {
-			dialog.ShowError(fmt.Errorf("no targets found in file"), w)
-			return
-		}
-		if !strings.HasPrefix(firstTarget, "http://") && !strings.HasPrefix(firstTarget, "https://") {
-			firstTarget = "http://" + firstTarget
-		}
-
-		loadedTemplate, err := templates.FindFirstTemplate(firstTarget, templatesDir)
-
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to load template: %w", err), w)
-			return
-		}
-
-		isRunning.Store(true)
-		startBtn.Disable()
-		stopBtn.Enable()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancelScan = cancel
-
-		statsUpdateCh := make(chan string, 10)
-
-		go func() {
-			for update := range statsUpdateCh {
-				_ = statsBinding.Set(update)
-			}
-		}()
-
-		go func() {
-			defer func() {
-				close(statsUpdateCh)
-				a.Driver().DoFromGoroutine(func() {
-					isRunning.Store(false)
-					startBtn.Enable()
-					stopBtn.Disable()
-				}, true)
-			}()
-
-			var totalTargets int64 = 0
-			var processed int64 = 0
-			var success int64 = 0
-			var errors int64 = 0
-			var totalDuration int64 = 0
-
-			targetsChan := make(chan string, 1000)
-
-			go func() {
-				file, err := os.Open(targetsFile)
-				if err != nil {
-					log.Printf("Error opening targets file %s: %v\n", targetsFile, err)
-					close(targetsChan)
-					return
-				}
-
-				defer file.Close()
-
-				bufScanner := bufio.NewScanner(file)
-				for bufScanner.Scan() {
-					select {
-					case <-ctx.Done():
-						close(targetsChan)
-						return
-					default:
-						target := bufScanner.Text()
-						atomic.AddInt64(&totalTargets, 1)
-						targetsChan <- target
-					}
-				}
-				if err := bufScanner.Err(); err != nil {
-					log.Println("Error reading targets:", err)
-				}
-				close(targetsChan)
-			}()
-
-			wrappedProcessFn := func(ctx context.Context, target string) error {
-				startTime := time.Now()
-				err := scanner.ProcessTarget(ctx, target, loadedTemplate, timeoutSec)
-				durationMs := time.Since(startTime).Milliseconds()
-
-				atomic.AddInt64(&processed, 1)
-				atomic.AddInt64(&totalDuration, durationMs)
-
-				if err == nil {
-					atomic.AddInt64(&success, 1)
-				} else {
-					log.Printf("Error processing target %s: %v\n", target, err)
-					atomic.AddInt64(&errors, 1)
-				}
-
-				return err
-			}
-
-			resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, wrappedProcessFn)
-
-			ticker := time.NewTicker(300 * time.Millisecond)
-			defer ticker.Stop()
-
-		loop:
-			for {
-				select {
-				case <-ctx.Done():
-					break loop
-				case <-resultsDone:
-					break loop
-				case <-ticker.C:
-					processedCount := atomic.LoadInt64(&processed)
-					totalDurationMs := atomic.LoadInt64(&totalDuration)
-					avgDuration := float64(0)
-					if processedCount > 0 {
-						avgDuration = float64(totalDurationMs) / float64(processedCount)
-					}
-					errorsCount := atomic.LoadInt64(&errors)
-					successCount := atomic.LoadInt64(&success)
-					totalCount := atomic.LoadInt64(&totalTargets)
-
-					statsUpdateCh <- fmt.Sprintf(
-						"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %.2f",
-						totalCount,
-						processedCount,
-						successCount,
-						errorsCount,
-						avgDuration,
-					)
-				}
-			}
-
-			processedCount := atomic.LoadInt64(&processed)
-			totalDurationMs := atomic.LoadInt64(&totalDuration)
-			avgDuration := float64(0)
-			if processedCount > 0 {
-				avgDuration = float64(totalDurationMs) / float64(processedCount)
-			}
-			errorsCount := atomic.LoadInt64(&errors)
-			successCount := atomic.LoadInt64(&success)
-			totalCount := atomic.LoadInt64(&totalTargets)
-
-			statsUpdateCh <- fmt.Sprintf(
-				"Scan finished.\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %.2f",
-				totalCount,
-				processedCount,
-				successCount,
-				errorsCount,
-				avgDuration,
-			)
-		}()
+		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsSelect, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan)
 	}
 
 	stopBtn.OnTapped = func() {
@@ -280,4 +73,253 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	)
 
 	return section, isRunning, &cancelScan
+}
+
+func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.Label) *widget.Button {
+	return widget.NewButton("Select targets.txt", func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+			*targetsFile = reader.URI().Path()
+			label.SetText("Targets: " + *targetsFile)
+		}, w)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		fd.Show()
+	})
+}
+
+func newSelectTemplatesButton(w fyne.Window, templatesDir *string, label *widget.Label) *widget.Button {
+	return widget.NewButton("Select templates folder", func() {
+		fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil || uri == nil {
+				return
+			}
+			*templatesDir = uri.Path()
+			label.SetText("Templates: " + *templatesDir)
+		}, w)
+		fd.Show()
+	})
+}
+
+func newThreadsSelect(maxThreads int) *widget.Select {
+	options := []string{}
+	for i := 1; i <= maxThreads; i++ {
+		options = append(options, strconv.Itoa(i))
+	}
+	selectWidget := widget.NewSelect(options, nil)
+	selectWidget.SetSelected(strconv.Itoa(maxThreads))
+	return selectWidget
+}
+
+func newTimeoutEntry() *widget.Entry {
+	e := widget.NewEntry()
+	e.SetText("5")
+	return e
+}
+
+func initialStatsText() string {
+	return "Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\nAvg time (ms): 0"
+}
+
+func handleStartButtonClick(
+	a fyne.App,
+	w fyne.Window,
+	targetsFile, templatesDir string,
+	threadsSelect *widget.Select,
+	timeoutEntry *widget.Entry,
+	statsBinding binding.String,
+	isRunning *atomic.Bool,
+	startBtn, stopBtn *widget.Button,
+	cancelScan *context.CancelFunc,
+) {
+	if isRunning.Load() {
+		dialog.ShowInformation("Scanner running", "Scanner is already running", w)
+		return
+	}
+
+	threads, err := strconv.Atoi(threadsSelect.Selected)
+	if err != nil || threads <= 0 {
+		dialog.ShowError(fmt.Errorf("invalid thread count"), w)
+		return
+	}
+
+	timeoutFloat, err := strconv.ParseFloat(timeoutEntry.Text, 64)
+	if err != nil || timeoutFloat < 0 {
+		dialog.ShowError(fmt.Errorf("invalid timeout"), w)
+		return
+	}
+	timeout := time.Duration(timeoutFloat * float64(time.Second))
+
+	if targetsFile == "" {
+		dialog.ShowError(fmt.Errorf("targets file not selected"), w)
+		return
+	}
+	if templatesDir == "" {
+		dialog.ShowError(fmt.Errorf("templates folder not selected"), w)
+		return
+	}
+
+	allTemplates, err := loadAllTemplates(templatesDir)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("failed to load templates: %w", err), w)
+		return
+	}
+
+	isRunning.Store(true)
+	startBtn.Disable()
+	stopBtn.Enable()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	*cancelScan = cancel
+
+	statsUpdateCh := make(chan string, 10)
+	go updateStatsBinding(statsBinding, statsUpdateCh)
+
+	go runScan(ctx, targetsFile, threads, timeout, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
+}
+
+func loadAllTemplates(templatesDir string) ([]*templates.Template, error) {
+	paths := []string{}
+	err := filepath.Walk(templatesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && (strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")) {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var templatesList []*templates.Template
+
+	for _, dir := range paths {
+		tpls, err := templates.LoadTemplates(dir)
+		if err != nil {
+			log.Printf("failed to load templates from %s: %v", dir, err)
+			continue
+		}
+		templatesList = append(templatesList, tpls...)
+	}
+
+	if len(templatesList) == 0 {
+		return nil, fmt.Errorf("no templates loaded from directory")
+	}
+
+	return templatesList, nil
+}
+
+func updateStatsBinding(statsBinding binding.String, statsUpdateCh <-chan string) {
+	for update := range statsUpdateCh {
+		_ = statsBinding.Set(update)
+	}
+}
+
+func runScan(
+	ctx context.Context,
+	targetsFile string,
+	threads int,
+	timeout time.Duration,
+	allTemplates []*templates.Template,
+	statsUpdateCh chan<- string,
+	a fyne.App,
+	isRunning *atomic.Bool,
+	startBtn, stopBtn *widget.Button,
+) {
+	defer func() {
+		close(statsUpdateCh)
+		a.Driver().DoFromGoroutine(func() {
+			isRunning.Store(false)
+			startBtn.Enable()
+			stopBtn.Disable()
+		}, true)
+	}()
+
+	var totalTargets int64
+	var processed int64
+	var success int64
+	var errors int64
+	var totalDuration int64
+
+	targetsChan := make(chan string, 1000)
+
+	go feedTargets(ctx, targetsFile, targetsChan, &totalTargets)
+	client := &http.Client{
+		Timeout: timeout,
+	}
+	for _, tpl := range allTemplates {
+		tplCopy := tpl
+		processFn := func(ctx context.Context, target string) error {
+			startTime := time.Now()
+			matched, err := templates.MatchTemplate(ctx, client, target, tplCopy) 
+			durationMs := time.Since(startTime).Milliseconds()
+
+			atomic.AddInt64(&processed, 1)
+			atomic.AddInt64(&totalDuration, durationMs)
+
+			if err != nil {
+				log.Printf("Error processing target %s: %v\n", target, err)
+				atomic.AddInt64(&errors, 1)
+				return err
+			}
+
+			if matched {
+				atomic.AddInt64(&success, 1)
+				return nil
+			}
+
+			atomic.AddInt64(&errors, 1)
+			return fmt.Errorf("no match found")
+		}
+
+		resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-resultsDone:
+		}
+	}
+
+	statsUpdateCh <- "Scan finished.\n" + formatStats(totalTargets, processed, success, errors, totalDuration)
+}
+
+func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- string, totalTargets *int64) {
+	defer close(targetsChan)
+
+	file, err := os.Open(targetsFile)
+	if err != nil {
+		log.Printf("Error opening targets file %s: %v\n", targetsFile, err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			target := strings.TrimSpace(scanner.Text())
+			if target == "" {
+				continue
+			}
+			targetsChan <- target
+			atomic.AddInt64(totalTargets, 1)
+		}
+	}
+}
+
+func formatStats(totalTargets, processed, success, errors, totalDuration int64) string {
+	var avgMs int64
+	if processed > 0 {
+		avgMs = totalDuration / processed
+	}
+	return fmt.Sprintf(
+		"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %d",
+		totalTargets, processed, success, errors, avgMs,
+	)
 }

@@ -51,9 +51,9 @@ func normalizeTarget(target string) string {
 }
 
 
-func ProcessTarget(ctx context.Context, target string, template *templates.Template, timeoutSec int) error {
+func ProcessTarget(ctx context.Context, target string, template *templates.Template, timeout time.Duration) error {
 	client := &http.Client{
-		Timeout: time.Duration(timeoutSec) * time.Second,
+		Timeout: timeout,
 	}
 
 	baseURL := normalizeTarget(target)

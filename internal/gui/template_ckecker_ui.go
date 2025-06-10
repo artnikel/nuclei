@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
-	"gopkg.in/yaml.v3"
 
 	"github.com/artnikel/nuclei/internal/templates"
 )
@@ -103,14 +102,8 @@ func createTemplateAction(parentWindow fyne.Window, urlEntry *widget.Entry) {
 	}
 
 	tmpl := templates.GenerateTemplate(url)
-	// if err != nil {
-	// 	dialog.ShowError(fmt.Errorf("template generation failed: %w", err), parentWindow)
-	// 	return
-	// }
-
-	data, err := yaml.Marshal(tmpl)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to serialize template: %w", err), parentWindow)
+	if strings.HasPrefix(tmpl, "# Failed") {
+		dialog.ShowError(fmt.Errorf("template generation failed:\n%s", tmpl), parentWindow)
 		return
 	}
 
@@ -118,7 +111,7 @@ func createTemplateAction(parentWindow fyne.Window, urlEntry *widget.Entry) {
 		if err != nil || writer == nil {
 			return
 		}
-		_, err = writer.Write(data)
+		_, err = writer.Write([]byte(tmpl))
 		if err != nil {
 			dialog.ShowError(err, parentWindow)
 			return

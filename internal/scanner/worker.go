@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -24,7 +25,10 @@ func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, pro
 					if !ok {
 						return
 					}
-					_ = processFn(ctx, target)
+					err := processFn(ctx, target)
+					if err != nil {
+						fmt.Printf("Error processing target %s: %v\n", target, err)
+					}
 				}
 			}
 		}()

@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -65,15 +64,24 @@ type Matcher struct {
 	Status    []int    `yaml:"status,omitempty"`
 	Condition string   `yaml:"condition,omitempty"`
 	Regex     string   `yaml:"regex,omitempty"`
+	Size      int      `yaml:"size,omitempty"`
+	Dlength   int      `yaml:"dlength,omitempty"`
+	Binary    string   `yaml:"binary,omitempty"`
+	XPath     string   `yaml:"xpath,omitempty"`
+	JSONPath  string   `yaml:"jsonpath,omitempty"`
+	NoCase    bool     `yaml:"nocase,omitempty"`
 }
 
 type Extractor struct {
-	Type   string `yaml:"type"`
-	Part   string `yaml:"part,omitempty"`
-	Group  string `yaml:"group,omitempty"`
-	Regex  string `yaml:"regex,omitempty"`
-	Name   string `yaml:"name,omitempty"`
-	NoCase bool   `yaml:"nocase,omitempty"`
+	Type     string `yaml:"type"`
+	Part     string `yaml:"part,omitempty"`
+	Group    string `yaml:"group,omitempty"`
+	Regex    string `yaml:"regex,omitempty"`
+	Name     string `yaml:"name,omitempty"`
+	NoCase   bool   `yaml:"nocase,omitempty"`
+	XPath    string `yaml:"xpath,omitempty"`
+	JSONPath string `yaml:"jsonpath,omitempty"`
+	Base64   bool   `yaml:"base64,omitempty"`
 }
 
 type Attack struct {
@@ -318,92 +326,22 @@ func checkSingleMatcher(m Matcher, resp *http.Response, body []byte) bool {
 		}
 		return false
 	case "word":
-		return matchWordsByPart(resp, body, m.Words, m.Part, m.Condition)
+		return matchWordsByPart(resp, body, m.Words, m.Part, m.Condition, m.NoCase)
 	case "regex":
-		return matchRegexByPart(resp, body, m.Regex, m.Part, m.Condition)
+		return matchRegexByPart(resp, body, m.Regex, m.Part, m.NoCase)
+	case "size":
+		return matchSizeByPart(resp, body, m.Size, m.Part)
+	case "dlength":
+		return matchDlengthByPart(resp, body, m.Condition, m.Dlength, m.Part)
+	case "binary":
+		return matchBinaryByPart(resp, body, []byte(m.Binary), m.Part)
+	case "xpath":
+		return matchXPathByPart(body, m.XPath)
+	case "json":
+		return matchJSONByPart(body, m.JSONPath)
 	default:
 		return false
 	}
-}
-
-func matchWordsByPart(resp *http.Response, body []byte, words []string, part, condition string) bool {
-	var text string
-	switch part {
-	case "body", "":
-		text = string(body)
-	case "header":
-		var headers []string
-		for k, v := range resp.Header {
-			headers = append(headers, k+": "+strings.Join(v, ","))
-		}
-		text = strings.Join(headers, "\n")
-	case "all":
-		text = string(body)
-		for k, v := range resp.Header {
-			text += "\n" + k + ": " + strings.Join(v, ",")
-		}
-	case "status":
-		text = fmt.Sprintf("%d", resp.StatusCode)
-	case "response":
-		text = string(body)
-	default:
-		text = string(body)
-	}
-
-	condition = strings.ToLower(condition)
-	if condition == "" {
-		condition = "and"
-	}
-
-	foundResults := make([]bool, len(words))
-	for i, w := range words {
-		foundResults[i] = strings.Contains(text, w)
-	}
-
-	if condition == "or" {
-		for _, r := range foundResults {
-			if r {
-				return true
-			}
-		}
-		return false
-	}
-
-	for _, r := range foundResults {
-		if !r {
-			return false
-		}
-	}
-	return true
-}
-
-func matchRegexByPart(resp *http.Response, body []byte, regexStr, part, condition string) bool {
-	var text string
-	switch part {
-	case "body", "":
-		text = string(body)
-	case "header":
-		var headers []string
-		for k, v := range resp.Header {
-			headers = append(headers, k+": "+strings.Join(v, ","))
-		}
-		text = strings.Join(headers, "\n")
-	case "all":
-		text = string(body)
-		for k, v := range resp.Header {
-			text += "\n" + k + ": " + strings.Join(v, ",")
-		}
-	case "status":
-		text = fmt.Sprintf("%d", resp.StatusCode)
-	default:
-		text = string(body)
-	}
-
-	re, err := regexp.Compile(regexStr)
-	if err != nil {
-		return false
-	}
-	return re.MatchString(text)
 }
 
 func GenerateTemplate(targetURL string) string {
@@ -504,7 +442,6 @@ func extractHTMLTitle(r io.Reader) string {
 }
 
 func escapeYAMLString(s string) string {
-	// Простейшее экранирование для YAML строк
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	return s
 }

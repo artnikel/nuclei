@@ -10,16 +10,15 @@ import (
 	"time"
 
 	"github.com/artnikel/nuclei/internal/templates"
+	"slices"
 )
 
 func matchResponse(m templates.Matcher, resp *http.Response, body []byte) bool {
 	switch m.Type {
 	case "status":
-		for _, code := range m.Status {
-			if resp.StatusCode == code {
+		if slices.Contains(m.Status, resp.StatusCode) {
 				return true
 			}
-		}
 	case "word":
 		part := m.Part
 		for _, word := range m.Words {
@@ -44,27 +43,26 @@ func matchResponse(m templates.Matcher, resp *http.Response, body []byte) bool {
 }
 
 func normalizeTarget(target string) string {
-    if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-        return target
-    }
-    return "http://" + target
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return target
+	}
+	return "http://" + target
 }
 
-
 func ProcessTarget(ctx context.Context, target string, template *templates.Template, timeout time.Duration) error {
-	client := &http.Client{
-		Timeout: timeout,
-	}
-
+	client := &http.Client{Timeout: timeout}
 	baseURL := normalizeTarget(target)
 
 	for _, req := range template.Requests {
-		for _, path := range req.Path {
+		for _, pathTmpl := range req.Path {
 			var urlStr string
-			if strings.Contains(path, "{{BaseURL}}") {
-				urlStr = strings.ReplaceAll(path, "{{BaseURL}}", baseURL)
+			if strings.Contains(pathTmpl, "{{BaseURL}}") {
+				urlStr = strings.ReplaceAll(pathTmpl, "{{BaseURL}}", baseURL)
 			} else {
-				urlStr = baseURL + path
+				if !strings.HasPrefix(pathTmpl, "/") {
+					pathTmpl = "/" + pathTmpl
+				}
+				urlStr = baseURL + pathTmpl
 			}
 
 			httpReq, err := http.NewRequestWithContext(ctx, req.Method, urlStr, nil)
@@ -80,7 +78,6 @@ func ProcessTarget(ctx context.Context, target string, template *templates.Templ
 			if err != nil {
 				return fmt.Errorf("request failed: %w", err)
 			}
-
 			bodyBytes, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
@@ -98,11 +95,14 @@ func ProcessTarget(ctx context.Context, target string, template *templates.Templ
 					break
 				}
 			}
+
+			fmt.Printf("Template %s, request %s: matched=%v, status=%d\n",
+				template.ID, urlStr, matched, resp.StatusCode)
+
 			if !matched {
 				return fmt.Errorf("response for %s did not match any matcher", urlStr)
 			}
 		}
 	}
-
 	return nil
 }

@@ -1,14 +1,39 @@
+//go:generate make release
 package main
 
 import (
+	"log"
+	"os"
+	"time"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 
 	"github.com/artnikel/nuclei/internal/gui"
+	"github.com/artnikel/nuclei/internal/security"
 )
 
 func main() {
+	go func() {
+		for {
+			if security.IsBeingDebugged() {
+				log.Println("Debug detected. Exiting.")
+				os.Exit(1)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
+	// lc := license.NewLicenseClient(serverURL, licenseKey)
+	// go func() {
+	// 	for {
+	// 		time.Sleep(24 * time.Hour)
+
+	// 		if err := lc.CheckLicense(); err != nil {
+	// 			log.Println("Failed to verify the license:", err)
+	// 		}
+	// 	}
+	// }()
 	a := app.NewWithID("com.scanner.nuclei")
 	w := a.NewWindow("Nuclei 3.0 GUI Scanner")
 

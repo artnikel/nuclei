@@ -4,21 +4,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/artnikel/nuclei/internal/templates"
 	"slices"
+
+	"github.com/artnikel/nuclei/internal/templates"
 )
 
 func matchResponse(m templates.Matcher, resp *http.Response, body []byte) bool {
 	switch m.Type {
 	case "status":
 		if slices.Contains(m.Status, resp.StatusCode) {
-				return true
-			}
+			return true
+		}
 	case "word":
 		part := m.Part
 		for _, word := range m.Words {
@@ -49,21 +51,46 @@ func normalizeTarget(target string) string {
 	return "http://" + target
 }
 
+func renderTemplateString(tmplStr string, data map[string]string) (string, error) {
+	tmpl, err := template.New("tmpl").Parse(tmplStr)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	err = tmpl.Execute(&buf, data)
+	return buf.String(), err
+}
+
+func renderPath(baseURL, pathTmpl string) string {
+    vars := map[string]string{
+        "BaseURL": baseURL,
+    }
+    res, err := renderTemplateString(pathTmpl, vars)
+    if err != nil {
+        fmt.Printf("failed to render path template: %v\n", err)
+        return pathTmpl
+    }
+    if strings.Contains(res, "{{BaseURL}}") {
+        return baseURL
+    }
+
+    if !strings.HasPrefix(res, "http://") && !strings.HasPrefix(res, "https://") {
+        if !strings.HasPrefix(res, "/") {
+            res = "/" + res
+        }
+        res = baseURL + res
+    }
+    return res
+}
+
 func ProcessTarget(ctx context.Context, target string, template *templates.Template, timeout time.Duration) error {
 	client := &http.Client{Timeout: timeout}
 	baseURL := normalizeTarget(target)
 
 	for _, req := range template.Requests {
 		for _, pathTmpl := range req.Path {
-			var urlStr string
-			if strings.Contains(pathTmpl, "{{BaseURL}}") {
-				urlStr = strings.ReplaceAll(pathTmpl, "{{BaseURL}}", baseURL)
-			} else {
-				if !strings.HasPrefix(pathTmpl, "/") {
-					pathTmpl = "/" + pathTmpl
-				}
-				urlStr = baseURL + pathTmpl
-			}
+			urlStr := renderPath(baseURL, pathTmpl)
+			fmt.Printf("Resolved URL: %s\n", urlStr)
 
 			httpReq, err := http.NewRequestWithContext(ctx, req.Method, urlStr, nil)
 			if err != nil {

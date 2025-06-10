@@ -73,15 +73,15 @@ type Matcher struct {
 }
 
 type Extractor struct {
-	Type     string `yaml:"type"`
-	Part     string `yaml:"part,omitempty"`
-	Group    string `yaml:"group,omitempty"`
-	Regex    string `yaml:"regex,omitempty"`
-	Name     string `yaml:"name,omitempty"`
-	NoCase   bool   `yaml:"nocase,omitempty"`
-	XPath    string `yaml:"xpath,omitempty"`
-	JSONPath string `yaml:"jsonpath,omitempty"`
-	Base64   bool   `yaml:"base64,omitempty"`
+	Type     string   `yaml:"type"`
+	Part     string   `yaml:"part,omitempty"`
+	Group    string   `yaml:"group,omitempty"`
+	Regex    []string `yaml:"regex,omitempty"`
+	Name     string   `yaml:"name,omitempty"`
+	NoCase   bool     `yaml:"nocase,omitempty"`
+	XPath    string   `yaml:"xpath,omitempty"`
+	JSONPath string   `yaml:"jsonpath,omitempty"`
+	Base64   bool     `yaml:"base64,omitempty"`
 }
 
 type Attack struct {
@@ -218,6 +218,12 @@ func MatchTemplate(ctx context.Context, client *http.Client, baseURL string, tmp
 	if err != nil {
 		return false, fmt.Errorf("invalid target url: %w", err)
 	}
+
+	baseURLForVars := fmt.Sprintf("%s://%s", parsedBaseURL.Scheme, parsedBaseURL.Host)
+	if tmpl.Variables == nil {
+		tmpl.Variables = make(map[string]string)
+	}
+	tmpl.Variables["BaseURL"] = baseURLForVars
 
 	for _, req := range tmpl.Requests {
 		method := req.Method

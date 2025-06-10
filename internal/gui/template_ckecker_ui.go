@@ -1,8 +1,10 @@
 package gui
 
 import (
-	"path/filepath"
+	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -17,7 +19,6 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.Canv
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("Enter URL to check templates")
 
-	urlEntryContainer := container.NewMax(urlEntry)
 	templateCheckLabel := widget.NewLabel("Template folder: (not selected)")
 	templateResultsLabel := widget.NewLabel("")
 	createTemplateBtn := widget.NewButton("Create new template", nil)
@@ -26,73 +27,20 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.Canv
 	var checkTemplatesDir string
 
 	selectTemplateCheckDirBtn := widget.NewButton("Select templates folder for checking", func() {
-		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
-			if err != nil || uri == nil {
-				return
-			}
-			checkTemplatesDir = uri.Path()
-			templateCheckLabel.SetText("Template folder: " + checkTemplatesDir)
-		}, parentWindow)
+		selectTemplatesFolder(parentWindow, &checkTemplatesDir, templateCheckLabel)
 	})
 
 	checkTemplatesBtn := widget.NewButton("Check templates", func() {
-		if checkTemplatesDir == "" {
-			dialog.ShowInformation("Error", "Please select a templates folder", parentWindow)
-			return
-		}
-		url := strings.TrimSpace(urlEntry.Text)
-		if url == "" {
-			dialog.ShowInformation("Error", "Please enter a URL", parentWindow)
-			return
-		}
-
-		matched, err := templates.FindMatchingTemplates(url, checkTemplatesDir)
-		if err != nil {
-			dialog.ShowError(err, parentWindow)
-			return
-		}
-
-		if len(matched) == 0 {
-			templateResultsLabel.SetText("No matching templates found.\nYou can create a new template.")
-			createTemplateBtn.Enable()
-		} else {
-			resultStr := "Matching templates:\n"
-			for _, path := range matched {
-				resultStr += filepath.Base(path) + "\n"
-			}
-			templateResultsLabel.SetText(resultStr)
-			createTemplateBtn.Disable()
-		}
+		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, templateResultsLabel, createTemplateBtn)
 	})
 
 	createTemplateBtn.OnTapped = func() {
-		url := strings.TrimSpace(urlEntry.Text)
-		if url == "" {
-			dialog.ShowInformation("Error", "Please enter a URL", parentWindow)
-			return
-		}
-		tpl := templates.GenerateTemplate(url)
-
-		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-			if err != nil || writer == nil {
-				return
-			}
-			_, err = writer.Write([]byte(tpl))
-			if err != nil {
-				dialog.ShowError(err, parentWindow)
-				return
-			}
-			writer.Close()
-			dialog.ShowInformation("Success", "Template saved", parentWindow)
-		}, parentWindow)
-		saveDialog.SetFileName("template.yaml")
-		saveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".yaml", ".yml"}))
-		saveDialog.Show()
+		createTemplateAction(parentWindow, urlEntry)
 	}
 
 	section := container.NewVBox(
 		widget.NewLabel("Template Checker Section"),
-		urlEntryContainer,
+		container.NewStack(urlEntry),
 		selectTemplateCheckDirBtn, templateCheckLabel,
 		checkTemplatesBtn,
 		templateResultsLabel,
@@ -100,4 +48,78 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.Canv
 	)
 
 	return section
+}
+
+func selectTemplatesFolder(parentWindow fyne.Window, dir *string, label *widget.Label) {
+	dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+		if err != nil || uri == nil {
+			return
+		}
+		*dir = uri.Path()
+		label.SetText("Template folder: " + *dir)
+	}, parentWindow)
+}
+
+func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, templatesDir string, resultsLabel *widget.Label, createBtn *widget.Button) {
+	if templatesDir == "" {
+		dialog.ShowInformation("Error", "Please select a templates folder", parentWindow)
+		return
+	}
+	url := strings.TrimSpace(urlEntry.Text)
+	if url == "" {
+		dialog.ShowInformation("Error", "Please enter a URL", parentWindow)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, 5*time.Second)
+	if err != nil {
+		dialog.ShowError(err, parentWindow)
+		return
+	}
+
+	if len(matched) == 0 {
+		resultsLabel.SetText("No matching templates found.\nYou can create a new template.")
+		createBtn.Enable()
+	} else {
+		var resultStr strings.Builder
+		resultStr.WriteString("Matching templates:\n")
+		for _, tmpl := range matched {
+			resultStr.WriteString(tmpl.ID + "\n")
+		}
+		resultsLabel.SetText(resultStr.String())
+		createBtn.Disable()
+	}
+}
+
+func createTemplateAction(parentWindow fyne.Window, urlEntry *widget.Entry) {
+	url := strings.TrimSpace(urlEntry.Text)
+	if url == "" {
+		dialog.ShowInformation("Error", "Please enter a URL", parentWindow)
+		return
+	}
+
+	tmpl := templates.GenerateTemplate(url)
+	if strings.HasPrefix(tmpl, "# Failed") {
+		dialog.ShowError(fmt.Errorf("template generation failed:\n%s", tmpl), parentWindow)
+		return
+	}
+
+	saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+		if err != nil || writer == nil {
+			return
+		}
+		_, err = writer.Write([]byte(tmpl))
+		if err != nil {
+			dialog.ShowError(err, parentWindow)
+			return
+		}
+		writer.Close()
+		dialog.ShowInformation("Success", "Template saved", parentWindow)
+	}, parentWindow)
+	saveDialog.SetFileName("template.yaml")
+	saveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".yaml", ".yml"}))
+	saveDialog.Show()
 }

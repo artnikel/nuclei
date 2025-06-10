@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	a := app.NewWithID("com.artnikel.nuclei")
+	a := app.NewWithID("com.scanner.nuclei")
 	w := a.NewWindow("Nuclei 3.0 GUI Scanner")
 
 	scannerSection, _, _ := gui.BuildScannerSection(a, w)
@@ -21,6 +21,6 @@ func main() {
 	)
 
 	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(600, 450))
+	w.Resize(fyne.NewSize(600, 500))
 	w.ShowAndRun()
 }

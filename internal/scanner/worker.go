@@ -1,3 +1,4 @@
+// pacakage scanner implementing workers that process targets
 package scanner
 
 import (
@@ -6,8 +7,11 @@ import (
 	"sync"
 )
 
+// ProcessTargetFunc defines a function for processing one target (target)
 type ProcessTargetFunc func(ctx context.Context, target string) error
 
+// StartWorkers starts the specified number of Workers that process targets from the targetsCh channel in parallel.
+// Returns the channel that will be closed after all Workers are finished
 func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, processFn ProcessTargetFunc) <-chan struct{} {
 	doneCh := make(chan struct{})
 

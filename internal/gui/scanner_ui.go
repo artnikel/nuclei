@@ -1,3 +1,4 @@
+// package gui implements the user interface of the project - scanner section
 package gui
 
 import (
@@ -5,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,10 +21,12 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/scanner"
 	"github.com/artnikel/nuclei/internal/templates"
 )
 
+// BuildScannerSection builds the scanner UI section and returns it along with the start flag and cancel function
 func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
 	var targetsFile string
 	var templatesDir string
@@ -75,8 +77,9 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	return section, isRunning, &cancelScan
 }
 
+// newSelectTargetsButton creates a button to select a file with scan targets
 func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.Label) *widget.Button {
-	return widget.NewButton("Select targets.txt", func() {
+	return widget.NewButton("Select targets (.txt)", func() {
 		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil || reader == nil {
 				return
@@ -84,11 +87,12 @@ func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.La
 			*targetsFile = reader.URI().Path()
 			label.SetText("Targets: " + *targetsFile)
 		}, w)
-		fd.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{constants.TxtFileFormat}))
 		fd.Show()
 	})
 }
 
+// newSelectTemplatesButton creates a button to select a template directory
 func newSelectTemplatesButton(w fyne.Window, templatesDir *string, label *widget.Label) *widget.Button {
 	return widget.NewButton("Select templates folder", func() {
 		fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
@@ -102,6 +106,7 @@ func newSelectTemplatesButton(w fyne.Window, templatesDir *string, label *widget
 	})
 }
 
+// newThreadsSelect creates a drop-down list with a selection of the number of threads
 func newThreadsSelect(maxThreads int) *widget.Select {
 	options := []string{}
 	for i := 1; i <= maxThreads; i++ {
@@ -112,16 +117,19 @@ func newThreadsSelect(maxThreads int) *widget.Select {
 	return selectWidget
 }
 
+// newTimeoutEntry creates a field for entering the timeout value in seconds
 func newTimeoutEntry() *widget.Entry {
 	e := widget.NewEntry()
-	e.SetText("5")
+	e.SetText("1")
 	return e
 }
 
+// initialStatsText returns a string with initial statistics values
 func initialStatsText() string {
 	return "Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\nAvg time (ms): 0"
 }
 
+// handleStartButtonClick handles a click on the scan start button
 func handleStartButtonClick(
 	a fyne.App,
 	w fyne.Window,
@@ -149,7 +157,6 @@ func handleStartButtonClick(
 		dialog.ShowError(fmt.Errorf("invalid timeout"), w)
 		return
 	}
-	timeout := time.Duration(timeoutFloat * float64(time.Second))
 
 	if targetsFile == "" {
 		dialog.ShowError(fmt.Errorf("targets file not selected"), w)
@@ -176,16 +183,17 @@ func handleStartButtonClick(
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsBinding(statsBinding, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, timeout, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
+	go runScan(ctx, targetsFile, threads, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
 }
 
+// loadAllTemplates recursively loads all YAML templates from the specified directory
 func loadAllTemplates(templatesDir string) ([]*templates.Template, error) {
 	paths := []string{}
 	err := filepath.Walk(templatesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && (strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")) {
+		if !info.IsDir() && (strings.HasSuffix(path, constants.YamlFileFormat) || strings.HasSuffix(path, constants.YmlFileFormat)) {
 			paths = append(paths, path)
 		}
 		return nil
@@ -212,17 +220,18 @@ func loadAllTemplates(templatesDir string) ([]*templates.Template, error) {
 	return templatesList, nil
 }
 
+// updateStatsBinding listens to the update channel and updates the statistics string binding
 func updateStatsBinding(statsBinding binding.String, statsUpdateCh <-chan string) {
 	for update := range statsUpdateCh {
 		_ = statsBinding.Set(update)
 	}
 }
 
+// runScan starts the scan cycle: read targets, apply templates, collect statistics
 func runScan(
 	ctx context.Context,
 	targetsFile string,
 	threads int,
-	timeout time.Duration,
 	allTemplates []*templates.Template,
 	statsUpdateCh chan<- string,
 	a fyne.App,
@@ -247,14 +256,12 @@ func runScan(
 	targetsChan := make(chan string, 1000)
 
 	go feedTargets(ctx, targetsFile, targetsChan, &totalTargets)
-	client := &http.Client{
-		Timeout: timeout,
-	}
+
 	for _, tpl := range allTemplates {
 		tplCopy := tpl
 		processFn := func(ctx context.Context, target string) error {
 			startTime := time.Now()
-			matched, err := templates.MatchTemplate(ctx, client, target, tplCopy) 
+			matched, err := templates.MatchTemplate(ctx, target, tplCopy)
 			durationMs := time.Since(startTime).Milliseconds()
 
 			atomic.AddInt64(&processed, 1)
@@ -287,6 +294,7 @@ func runScan(
 	statsUpdateCh <- "Scan finished.\n" + formatStats(totalTargets, processed, success, errors, totalDuration)
 }
 
+// feedTargets reads targets from the file and sends them to the channel for scanning
 func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- string, totalTargets *int64) {
 	defer close(targetsChan)
 
@@ -313,6 +321,7 @@ func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- str
 	}
 }
 
+// formatStats formats the collected statistics at the end of scanning
 func formatStats(totalTargets, processed, success, errors, totalDuration int64) string {
 	var avgMs int64
 	if processed > 0 {

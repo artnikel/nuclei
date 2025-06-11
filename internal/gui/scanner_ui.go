@@ -22,12 +22,13 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/artnikel/nuclei/internal/constants"
+	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/scanner"
 	"github.com/artnikel/nuclei/internal/templates"
 )
 
 // BuildScannerSection builds the scanner UI section and returns it along with the start flag and cancel function
-func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
+func BuildScannerSection(a fyne.App, w fyne.Window, logger *logging.Logger) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
 	var targetsFile string
 	var templatesDir string
 
@@ -53,7 +54,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	stopBtn.Disable()
 
 	startBtn.OnTapped = func() {
-		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsSelect, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan)
+		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsSelect, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan, logger)
 	}
 
 	stopBtn.OnTapped = func() {
@@ -140,6 +141,7 @@ func handleStartButtonClick(
 	isRunning *atomic.Bool,
 	startBtn, stopBtn *widget.Button,
 	cancelScan *context.CancelFunc,
+	logger *logging.Logger,
 ) {
 	if isRunning.Load() {
 		dialog.ShowInformation("Scanner running", "Scanner is already running", w)
@@ -183,7 +185,7 @@ func handleStartButtonClick(
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsBinding(statsBinding, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
+	go runScan(ctx, targetsFile, threads, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn, logger)
 }
 
 // loadAllTemplates recursively loads all YAML templates from the specified directory
@@ -237,6 +239,7 @@ func runScan(
 	a fyne.App,
 	isRunning *atomic.Bool,
 	startBtn, stopBtn *widget.Button,
+	logger *logging.Logger,
 ) {
 	defer func() {
 		close(statsUpdateCh)
@@ -261,14 +264,14 @@ func runScan(
 		tplCopy := tpl
 		processFn := func(ctx context.Context, target string) error {
 			startTime := time.Now()
-			matched, err := templates.MatchTemplate(ctx, target, tplCopy)
+			matched, err := templates.MatchTemplate(ctx, target, tplCopy, logger)
 			durationMs := time.Since(startTime).Milliseconds()
 
 			atomic.AddInt64(&processed, 1)
 			atomic.AddInt64(&totalDuration, durationMs)
 
 			if err != nil {
-				log.Printf("Error processing target %s: %v\n", target, err)
+				logger.Info.Printf("Error processing target %s: %v\n", target, err)
 				atomic.AddInt64(&errors, 1)
 				return err
 			}
@@ -282,7 +285,7 @@ func runScan(
 			return fmt.Errorf("no match found")
 		}
 
-		resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn)
+		resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn, logger)
 
 		select {
 		case <-ctx.Done():

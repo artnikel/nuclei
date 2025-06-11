@@ -17,6 +17,7 @@ import (
 	"slices"
 
 	"github.com/artnikel/nuclei/internal/constants"
+	"github.com/artnikel/nuclei/internal/logging"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,7 +55,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 }
 
 // FindMatchingTemplates searches for matching templates for the specified URL, executing them in parallel
-func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration) ([]*Template, error) {
+func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration, logger *logging.Logger) ([]*Template, error) {
 	templates, err := LoadTemplates(templatesDir)
 	if err != nil {
 		return nil, err
@@ -80,7 +81,7 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 		go func(t *Template) {
 			defer wg.Done()
 
-			matches, err := MatchTemplate(ctx, targetURL, t)
+			matches, err := MatchTemplate(ctx, targetURL, t, logger)
 			if err == nil && matches {
 				mu.Lock()
 				matchedTemplates = append(matchedTemplates, t)
@@ -94,7 +95,7 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 }
 
 // MatchTemplate executes HTTP requests from the template and checks if the response matches the matchers conditions
-func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template) (bool, error) {
+func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *logging.Logger) (bool, error) {
 	client := newInsecureHTTPClient(constants.TenSecTimeout)
 	if len(tmpl.Requests) == 0 {
 		return false, fmt.Errorf("template %s has no requests", tmpl.ID)
@@ -132,19 +133,19 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template) (bool, e
 
 			resp, err := client.Do(httpReq)
 			if err != nil {
-				fmt.Printf("Request error for %s: %v\n", fullURL, err)
+				logger.Info.Printf("Request error for %s: %v\n", fullURL, err)
 				continue
 			}
 
 			bodyBytes, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
-				fmt.Printf("Read body error for %s: %v\n", fullURL, err)
+				logger.Info.Printf("Read body error for %s: %v\n", fullURL, err)
 				continue
 			}
 
 			matched := checkMatchers(req.Matchers, req.MatchersCondition, resp, bodyBytes)
-			fmt.Printf("Template %s, request %s: matched=%v, status=%d\n", tmpl.ID, fullURL, matched, resp.StatusCode)
+			logger.Info.Printf("Template %s, request %s: matched=%v, status=%d\n", tmpl.ID, fullURL, matched, resp.StatusCode)
 			if matched {
 				return true, nil
 			}

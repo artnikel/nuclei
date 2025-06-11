@@ -12,4 +12,7 @@ const (
 	TxtFileFormat = ".txt"
 	YmlFileFormat = ".yml"
 	YamlFileFormat = ".yaml"
+	// Permissions
+	FilePerm = 0o600
+	DirPerm = 0o750
 )

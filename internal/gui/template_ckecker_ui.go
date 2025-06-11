@@ -13,11 +13,12 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/artnikel/nuclei/internal/constants"
+	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/templates"
 )
 
 // BuildTemplateCheckerSection creates a UI section for checking and generating templates from URLs
-func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.CanvasObject {
+func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *logging.Logger) fyne.CanvasObject {
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("Enter URL to check templates")
 
@@ -33,7 +34,7 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window) fyne.Canv
 	})
 
 	checkTemplatesBtn := widget.NewButton("Check templates", func() {
-		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, templateResultsLabel, createTemplateBtn)
+		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, templateResultsLabel, createTemplateBtn, logger)
 	})
 
 	createTemplateBtn.OnTapped = func() {
@@ -64,7 +65,7 @@ func selectTemplatesFolder(parentWindow fyne.Window, dir *string, label *widget.
 }
 
 // checkTemplatesAction checks for matching templates for a given URL and updates the interface
-func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, templatesDir string, resultsLabel *widget.Label, createBtn *widget.Button) {
+func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, templatesDir string, resultsLabel *widget.Label, createBtn *widget.Button, logger *logging.Logger) {
 	if templatesDir == "" {
 		dialog.ShowInformation("Error", "Please select a templates folder", parentWindow)
 		return
@@ -78,7 +79,7 @@ func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, temp
 	ctx, cancel := context.WithTimeout(context.Background(), constants.TenSecTimeout)
 	defer cancel()
 
-	matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout)
+	matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout, logger)
 	if err != nil {
 		dialog.ShowError(err, parentWindow)
 		return

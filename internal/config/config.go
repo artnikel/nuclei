@@ -18,10 +18,16 @@ type AppConfig struct {
 	ID string `yaml:"id"`
 }
 
+// LoggingConfig holds logging-related settings
+type LoggingConfig struct {
+	Path string `yaml:"path"`
+}
+
 // Config aggregates all service configurations
 type Config struct {
-	License    LicenseConfig    `yaml:"license"`
-	App AppConfig `yaml:"app"`
+	License LicenseConfig `yaml:"license"`
+	App     AppConfig     `yaml:"app"`
+	Logging LoggingConfig `yaml:"logging"`
 }
 
 // LoadConfig loads the configuration from the given YAML file path

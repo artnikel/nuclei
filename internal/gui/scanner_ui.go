@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,7 +75,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 }
 
 func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.Label) *widget.Button {
-	return widget.NewButton("Select targets.txt", func() {
+	return widget.NewButton("Select targets (.txt)", func() {
 		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil || reader == nil {
 				return
@@ -114,7 +113,7 @@ func newThreadsSelect(maxThreads int) *widget.Select {
 
 func newTimeoutEntry() *widget.Entry {
 	e := widget.NewEntry()
-	e.SetText("5")
+	e.SetText("1")
 	return e
 }
 
@@ -149,7 +148,6 @@ func handleStartButtonClick(
 		dialog.ShowError(fmt.Errorf("invalid timeout"), w)
 		return
 	}
-	timeout := time.Duration(timeoutFloat * float64(time.Second))
 
 	if targetsFile == "" {
 		dialog.ShowError(fmt.Errorf("targets file not selected"), w)
@@ -176,7 +174,7 @@ func handleStartButtonClick(
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsBinding(statsBinding, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, timeout, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
+	go runScan(ctx, targetsFile, threads, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
 }
 
 func loadAllTemplates(templatesDir string) ([]*templates.Template, error) {
@@ -222,7 +220,6 @@ func runScan(
 	ctx context.Context,
 	targetsFile string,
 	threads int,
-	timeout time.Duration,
 	allTemplates []*templates.Template,
 	statsUpdateCh chan<- string,
 	a fyne.App,
@@ -247,14 +244,12 @@ func runScan(
 	targetsChan := make(chan string, 1000)
 
 	go feedTargets(ctx, targetsFile, targetsChan, &totalTargets)
-	client := &http.Client{
-		Timeout: timeout,
-	}
+
 	for _, tpl := range allTemplates {
 		tplCopy := tpl
 		processFn := func(ctx context.Context, target string) error {
 			startTime := time.Now()
-			matched, err := templates.MatchTemplate(ctx, client, target, tplCopy) 
+			matched, err := templates.MatchTemplate(ctx, target, tplCopy)
 			durationMs := time.Since(startTime).Milliseconds()
 
 			atomic.AddInt64(&processed, 1)

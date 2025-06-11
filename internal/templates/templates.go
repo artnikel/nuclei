@@ -1,8 +1,8 @@
+// package templates represents the processing of templates
 package templates
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,9 +14,13 @@ import (
 	"sync"
 	"time"
 
+	"slices"
+
+	"github.com/artnikel/nuclei/internal/constants"
 	"gopkg.in/yaml.v3"
 )
 
+// LoadTemplates loads and parses YAML templates from the specified directory
 func LoadTemplates(dir string) ([]*Template, error) {
 	var templates []*Template
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -26,7 +30,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if !(strings.HasSuffix(d.Name(), ".yaml") || strings.HasSuffix(d.Name(), ".yml")) {
+		if !(strings.HasSuffix(d.Name(), constants.YamlFileFormat) || strings.HasSuffix(d.Name(), constants.YmlFileFormat)) {
 			return nil
 		}
 		bs, err := os.ReadFile(path)
@@ -49,18 +53,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 	return templates, nil
 }
 
-func templateMatchesHost(tmpl *Template, targetHost string) bool {
-	if len(tmpl.Hosts) == 0 {
-		return true
-	}
-	for _, h := range tmpl.Hosts {
-		if strings.Contains(targetHost, h) {
-			return true
-		}
-	}
-	return false
-}
-
+// FindMatchingTemplates searches for matching templates for the specified URL, executing them in parallel
 func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration) ([]*Template, error) {
 	templates, err := LoadTemplates(templatesDir)
 	if err != nil {
@@ -100,19 +93,9 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 	return matchedTemplates, nil
 }
 
-func newInsecureHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-	}
-}
-
+// MatchTemplate executes HTTP requests from the template and checks if the response matches the matchers conditions
 func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template) (bool, error) {
-	client := newInsecureHTTPClient(10 * time.Second)
+	client := newInsecureHTTPClient(constants.TenSecTimeout)
 	if len(tmpl.Requests) == 0 {
 		return false, fmt.Errorf("template %s has no requests", tmpl.ID)
 	}
@@ -171,26 +154,7 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template) (bool, e
 	return false, nil
 }
 
-func buildFullURL(base *url.URL, path string) string {
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return path
-	}
-	u := *base
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + path
-	return u.String()
-}
-
-func substituteVariables(s string, vars map[string]string) string {
-	for k, v := range vars {
-		placeholder := fmt.Sprintf("{{%s}}", k)
-		s = strings.ReplaceAll(s, placeholder, v)
-	}
-	return s
-}
-
+// checkMatchers checks the list of matchers according to the given condition (and/or)
 func checkMatchers(matchers []Matcher, condition string, resp *http.Response, body []byte) bool {
 	if len(matchers) == 0 {
 		return true
@@ -223,15 +187,11 @@ func checkMatchers(matchers []Matcher, condition string, resp *http.Response, bo
 	return true
 }
 
+// checkSingleMatcher checks a single matcher against the server response
 func checkSingleMatcher(m Matcher, resp *http.Response, body []byte) bool {
 	switch m.Type {
 	case "status":
-		for _, st := range m.Status {
-			if resp.StatusCode == st {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(m.Status, resp.StatusCode)
 	case "word":
 		return matchWordsByPart(resp, body, m.Words, m.Part, m.Condition, m.NoCase)
 	case "regex":

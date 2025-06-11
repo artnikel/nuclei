@@ -1,0 +1,15 @@
+// Package constants defines shared constants used across the application
+package constants
+
+import "time"
+
+const (
+	// Timeouts
+	FiveSecTimeout = 5 * time.Second
+	TenSecTimeout  = 10 * time.Second
+	DayTimeout     = 24 * time.Hour
+	// File formats
+	TxtFileFormat = ".txt"
+	YmlFileFormat = ".yml"
+	YamlFileFormat = ".yaml"
+)

@@ -1,3 +1,4 @@
+// package templates - for checking matcher type
 package templates
 
 import (
@@ -12,6 +13,7 @@ import (
 	"github.com/antchfx/htmlquery"
 )
 
+// matchBinaryByPart checks for the presence of a binary pattern in the specified part of the response
 func matchBinaryByPart(resp *http.Response, body []byte, pattern []byte, part string) bool {
 	var data []byte
 
@@ -37,6 +39,7 @@ func matchBinaryByPart(resp *http.Response, body []byte, pattern []byte, part st
 	return bytes.Contains(data, pattern)
 }
 
+// matchDlengthByPart compares the length of the data in the answer part with the specified condition
 func matchDlengthByPart(resp *http.Response, body []byte, operator string, length int, part string) bool {
 	var data string
 
@@ -79,6 +82,7 @@ func matchDlengthByPart(resp *http.Response, body []byte, operator string, lengt
 	}
 }
 
+// matchXPathByPart checks for XPath nodes in the body of the HTML response
 func matchXPathByPart(body []byte, xpathExpr string) bool {
 	doc, err := htmlquery.Parse(bytes.NewReader(body))
 	if err != nil {
@@ -88,6 +92,7 @@ func matchXPathByPart(body []byte, xpathExpr string) bool {
 	return len(nodes) > 0
 }
 
+// getJSONValue retrieves a value from JSON at path
 func getJSONValue(body []byte, path string) interface{} {
 	var data interface{}
 	err := json.Unmarshal(body, &data)
@@ -98,9 +103,9 @@ func getJSONValue(body []byte, path string) interface{} {
 	cur := data
 	for _, p := range parts {
 		switch v := cur.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			cur = v[p]
-		case []interface{}:
+		case []any:
 			idx, err := strconv.Atoi(p)
 			if err != nil || idx < 0 || idx >= len(v) {
 				return nil
@@ -113,11 +118,13 @@ func getJSONValue(body []byte, path string) interface{} {
 	return cur
 }
 
+// matchJSONByPart проверяет наличие значения по JSON-пути в теле ответа
 func matchJSONByPart(body []byte, jsonPath string) bool {
 	val := getJSONValue(body, jsonPath)
 	return val != nil
 }
 
+// matchJSONByPart checks if the value exists along the JSON path in the response body
 func matchWordsByPart(resp *http.Response, body []byte, words []string, part, condition string, noCase bool) bool {
 	var text string
 
@@ -166,6 +173,7 @@ func matchWordsByPart(resp *http.Response, body []byte, words []string, part, co
 	return false
 }
 
+// matchRegexByPart checks for a match to the regular expression in the answer part
 func matchRegexByPart(resp *http.Response, body []byte, regexStr string, part string, noCase bool) bool {
 	var text string
 
@@ -203,6 +211,7 @@ func matchRegexByPart(resp *http.Response, body []byte, regexStr string, part st
 	return re.MatchString(text)
 }
 
+// matchSizeByPart compares the size of the specified response part with the specified value
 func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bool {
 	var length int
 	switch part {

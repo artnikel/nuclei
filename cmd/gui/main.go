@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/container"
 
 	"github.com/artnikel/nuclei/internal/config"
+	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/gui"
 	"github.com/artnikel/nuclei/internal/security"
 	"github.com/artnikel/nuclei/pkg/license"
@@ -28,14 +29,14 @@ func main() {
 				log.Println("Debug detected. Exiting.")
 				os.Exit(1)
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(constants.FiveSecTimeout)
 		}
 	}()
 
 	lc := license.NewLicenseClient(cfg.License.ServerURL, cfg.License.Key)
 	go func() {
 		for {
-			time.Sleep(24 * time.Hour)
+			time.Sleep(constants.DayTimeout)
 
 			if err := lc.CheckLicense(); err != nil {
 				log.Println("Failed to verify the license:", err)
@@ -53,8 +54,11 @@ func main() {
 		container.NewTabItem("Scanner", scannerSection),
 		container.NewTabItem("Template Checker", templateCheckerSection),
 	)
-
+	const (
+		width = 600
+		heigth = 500
+	)
 	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(600, 500))
+	w.Resize(fyne.NewSize(width, heigth))
 	w.ShowAndRun()
 }

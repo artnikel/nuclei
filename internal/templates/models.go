@@ -1,3 +1,4 @@
+// package templates - provides the data models used in the application
 package templates
 
 import (
@@ -80,6 +81,7 @@ type Attack struct {
 
 type Tags []string
 
+// UnmarshalYAML implements custom parsing of the Tags field from YAML (string or list)
 func (t *Tags) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.ScalarNode:

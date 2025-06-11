@@ -1,3 +1,4 @@
+// package license represents functions for license verification
 package license
 
 import (
@@ -5,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/artnikel/nuclei/internal/constants"
 )
 
+// LicenseClient represents a client to check the license on the remote server
 type LicenseClient struct {
 	serverURL  string
 	licenseKey string
@@ -14,12 +18,14 @@ type LicenseClient struct {
 	isValid    bool
 }
 
+// LicenseResponse describes the structure of the response from the licensing server
 type LicenseResponse struct {
 	Valid     bool   `json:"valid"`
 	ExpiresAt string `json:"expires_at"`
 	Message   string `json:"message"`
 }
 
+// NewLicenseClient creates a new instance of LicenseClient with the given server URL and license key
 func NewLicenseClient(serverURL, licenseKey string) *LicenseClient {
 	return &LicenseClient{
 		serverURL:  serverURL,
@@ -27,13 +33,14 @@ func NewLicenseClient(serverURL, licenseKey string) *LicenseClient {
 	}
 }
 
+// CheckLicense checks the license on the remote server. Caches the result for 24 hours
 func (lc *LicenseClient) CheckLicense() error {
-	if time.Since(lc.lastCheck) < 24*time.Hour && lc.isValid {
+	if time.Since(lc.lastCheck) < constants.DayTimeout && lc.isValid {
 		return nil
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", lc.serverURL+"/check-license", nil)
+	client := &http.Client{Timeout: constants.TenSecTimeout}
+	req, err := http.NewRequest(http.MethodGet, lc.serverURL+"/check-license", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -66,6 +73,7 @@ func (lc *LicenseClient) CheckLicense() error {
 	return nil
 }
 
+// IsValid returns a flag indicating the validity of the license after the last check
 func (lc *LicenseClient) IsValid() bool {
 	return lc.isValid
 }

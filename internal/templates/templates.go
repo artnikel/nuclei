@@ -21,6 +21,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// LoadTemplate loads and parses YAML template from the specified path
+func LoadTemplate(path string) (*Template, error) {
+	if !(strings.HasSuffix(path, constants.YamlFileFormat) || strings.HasSuffix(path, constants.YmlFileFormat)) {
+		return nil, fmt.Errorf("file is not a YAML template: %s", path)
+	}
+
+	bs, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	tmpl := &Template{}
+	if err := yaml.Unmarshal(bs, tmpl); err != nil {
+		return nil, fmt.Errorf("failed to parse template %s: %w", path, err)
+	}
+
+	tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
+	tmpl.Requests = append(tmpl.Requests, tmpl.HTTPRaw...)
+
+	return tmpl, nil
+}
+
 // LoadTemplates loads and parses YAML templates from the specified directory
 func LoadTemplates(dir string) ([]*Template, error) {
 	var templates []*Template
@@ -107,10 +129,11 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *
 	}
 
 	baseURLForVars := fmt.Sprintf("%s://%s", parsedBaseURL.Scheme, parsedBaseURL.Host)
-	if tmpl.Variables == nil {
-		tmpl.Variables = make(map[string]string)
+	vars := make(map[string]string)
+	for k, v := range tmpl.Variables {
+		vars[k] = v
 	}
-	tmpl.Variables["BaseURL"] = baseURLForVars
+	vars["BaseURL"] = baseURLForVars
 
 	for _, req := range tmpl.Requests {
 		method := req.Method
@@ -119,7 +142,7 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *
 		}
 
 		for _, p := range req.Path {
-			pathWithVars := substituteVariables(p, tmpl.Variables)
+			pathWithVars := substituteVariables(p, vars)
 			fullURL := buildFullURL(parsedBaseURL, pathWithVars)
 
 			httpReq, err := http.NewRequestWithContext(ctx, method, fullURL, nil)
@@ -128,7 +151,7 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *
 			}
 
 			for k, v := range req.Headers {
-				httpReq.Header.Set(k, substituteVariables(v, tmpl.Variables))
+				httpReq.Header.Set(k, substituteVariables(v, vars))
 			}
 
 			resp, err := client.Do(httpReq)

@@ -9,16 +9,18 @@ import (
 )
 
 type Template struct {
-	ID             string            `yaml:"id"`
-	Info           Info              `yaml:"info"`
-	Tags           Tags              `yaml:"tags,omitempty"`
-	Authors        []string          `yaml:"authors,omitempty"`
-	Severity       string            `yaml:"severity,omitempty"`
-	Description    string            `yaml:"description,omitempty"`
-	Reference      []string          `yaml:"reference,omitempty"`
-	Classification map[string]string `yaml:"classification,omitempty"`
-	Metadata       map[string]string `yaml:"metadata,omitempty"`
-	Variables      map[string]string `yaml:"variables,omitempty"`
+	ID               string            `yaml:"id"`
+	Info             Info              `yaml:"info"`
+	Tags             Tags              `yaml:"tags,omitempty"`
+	Authors          []string          `yaml:"authors,omitempty"`
+	Severity         string            `yaml:"severity,omitempty"`
+	Description      string            `yaml:"description,omitempty"`
+	Reference        []string          `yaml:"reference,omitempty"`
+	Classification   map[string]string `yaml:"classification,omitempty"`
+	Metadata         map[string]string `yaml:"metadata,omitempty"`
+	Variables        map[string]string `yaml:"variables,omitempty"`
+	StopAtFirstMatch bool              `yaml:"stop-at-first-match,omitempty"`
+	RequestCondition string            `yaml:"req-condition,omitempty"`
 
 	RequestsRaw []*Request `yaml:"requests,omitempty"`
 	HTTPRaw     []*Request `yaml:"http,omitempty"`
@@ -37,13 +39,16 @@ type Info struct {
 }
 
 type Request struct {
-	Method            string            `yaml:"method"`
-	Path              []string          `yaml:"path"`
-	Headers           map[string]string `yaml:"headers,omitempty"`
-	Matchers          []Matcher         `yaml:"matchers,omitempty"`
-	MatchersCondition string            `yaml:"matchers-condition,omitempty"`
-	Extractors        []Extractor       `yaml:"extractors,omitempty"`
-	Attack            *Attack           `yaml:"attack,omitempty"`
+	Method            string                 `yaml:"method"`
+	Path              []string               `yaml:"path"`
+	Headers           map[string]string      `yaml:"headers,omitempty"`
+	Matchers          []Matcher              `yaml:"matchers,omitempty"`
+	MatchersCondition string                 `yaml:"matchers-condition,omitempty"`
+	Extractors        []Extractor            `yaml:"extractors,omitempty"`
+	Attack            string                 `yaml:"attack,omitempty"`
+	Payloads          map[string][]string    `yaml:"payloads,omitempty"`
+	Pipeline          bool                   `yaml:"pipeline,omitempty"`
+	Options           map[string]interface{} `yaml:"options,omitempty"`
 }
 
 type Matcher struct {
@@ -71,12 +76,6 @@ type Extractor struct {
 	XPath    string   `yaml:"xpath,omitempty"`
 	JSONPath string   `yaml:"jsonpath,omitempty"`
 	Base64   bool     `yaml:"base64,omitempty"`
-}
-
-type Attack struct {
-	Payloads map[string][]string `yaml:"payloads,omitempty"`
-	Headers  map[string]string   `yaml:"headers,omitempty"`
-	Raw      string              `yaml:"raw,omitempty"`
 }
 
 type Tags []string

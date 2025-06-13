@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
@@ -49,10 +50,10 @@ func main() {
 			}
 		}
 	}()
-
 	a := app.NewWithID(cfg.App.ID)
+	a.Settings().SetTheme(theme.DarkTheme())
 	w := a.NewWindow("Nuclei 3.0 GUI Scanner")
-
+	
 	scannerSection, _, _ := gui.BuildScannerSection(a, w, logger)
 	templateCheckerSection := gui.BuildTemplateCheckerSection(a, w, logger)
 
@@ -61,10 +62,11 @@ func main() {
 		container.NewTabItem("Template Checker", templateCheckerSection),
 	)
 	const (
-		width  = 600
-		heigth = 500
+		width  = 800
+		heigth = 600
 	)
 	w.SetContent(tabs)
 	w.Resize(fyne.NewSize(width, heigth))
+	w.CenterOnScreen()
 	w.ShowAndRun()
 }

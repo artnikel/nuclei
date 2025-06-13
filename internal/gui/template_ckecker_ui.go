@@ -55,13 +55,15 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 
 // selectTemplatesFolder opens the dialog box for selecting a folder with templates and updates the path
 func selectTemplatesFolder(parentWindow fyne.Window, dir *string, label *widget.Label) {
-	dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+	fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 		if err != nil || uri == nil {
 			return
 		}
 		*dir = uri.Path()
 		label.SetText("Template folder: " + *dir)
 	}, parentWindow)
+	fd.Resize(fyne.NewSize(800, 600)) // задаём размер окна
+	fd.Show()
 }
 
 // checkTemplatesAction checks for matching templates for a given URL and updates the interface

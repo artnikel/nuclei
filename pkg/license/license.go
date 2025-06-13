@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/artnikel/nuclei/internal/constants"
@@ -19,10 +20,8 @@ type LicenseClient struct {
 }
 
 // LicenseResponse describes the structure of the response from the licensing server
-type LicenseResponse struct {
-	Valid     bool   `json:"valid"`
-	ExpiresAt string `json:"expires_at"`
-	Message   string `json:"message"`
+type LicenseValidateResponse struct {
+	Status string `json:"status"`
 }
 
 // NewLicenseClient creates a new instance of LicenseClient with the given server URL and license key
@@ -39,16 +38,16 @@ func (lc *LicenseClient) CheckLicense() error {
 		return nil
 	}
 
-	client := &http.Client{Timeout: constants.TenSecTimeout}
-	req, err := http.NewRequest(http.MethodGet, lc.serverURL+"/check-license", nil)
+	u, err := url.Parse(lc.serverURL + "/validate")
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("invalid license server URL: %w", err)
 	}
+	q := u.Query()
+	q.Set("key", lc.licenseKey)
+	u.RawQuery = q.Encode()
 
-	req.Header.Set("Authorization", "Bearer "+lc.licenseKey)
-	req.Header.Set("User-Agent", "NucleiScanner/3.0")
-
-	resp, err := client.Do(req)
+	client := &http.Client{Timeout: constants.TenSecTimeout}
+	resp, err := client.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("license check failed: %w", err)
 	}
@@ -58,17 +57,18 @@ func (lc *LicenseClient) CheckLicense() error {
 		return fmt.Errorf("license server returned status: %d", resp.StatusCode)
 	}
 
-	var licenseResp LicenseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&licenseResp); err != nil {
+	var respData LicenseValidateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
 		return fmt.Errorf("failed to decode license response: %w", err)
 	}
 
-	lc.isValid = licenseResp.Valid
-	lc.lastCheck = time.Now()
-
-	if !licenseResp.Valid {
-		return fmt.Errorf("license is invalid: %s", licenseResp.Message)
+	if respData.Status != "valid" {
+		lc.isValid = false
+		return fmt.Errorf("license invalid: status = %s", respData.Status)
 	}
+
+	lc.isValid = true
+	lc.lastCheck = time.Now()
 
 	return nil
 }

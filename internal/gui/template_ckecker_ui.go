@@ -39,13 +39,66 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 		selectTemplatesFolder(parentWindow, &checkTemplatesDir, templateCheckLabel)
 	})
 
-	checkTemplatesBtn := widget.NewButton("Check templates", func() {
-		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, resultsOutput, createTemplateBtn, logger)
-	})
-
 	createTemplateBtn.OnTapped = func() {
 		createTemplateAction(parentWindow, urlEntry)
 	}
+
+	advancedVisible := false
+
+	semaphoreEntry := widget.NewEntry()
+	semaphoreEntry.SetText("10") 
+
+	rateFreqEntry := widget.NewEntry()
+	rateFreqEntry.SetText("10") 
+
+	rateBurstEntry := widget.NewEntry()
+	rateBurstEntry.SetText("100")
+	advanced := &templates.AdvancedSettingsChecker{}
+
+	applyAdvancedBtn := widget.NewButton("Apply settings", func() {
+		headlessTabs, err1 := strconv.Atoi(semaphoreEntry.Text)
+		rateFreq, err2 := strconv.Atoi(rateFreqEntry.Text)
+		burstSize, err3 := strconv.Atoi(rateBurstEntry.Text)
+
+		if err1 != nil || err2 != nil || err3 != nil {
+			dialog.ShowError(fmt.Errorf("incorrect values"), parentWindow)
+			return
+		}
+
+		advanced.HeadlessTabs = headlessTabs
+		advanced.RateLimiterFrequency = rateFreq
+		advanced.RateLimiterBurstSize = burstSize
+
+		dialog.ShowInformation("Success", "Settings changed", parentWindow)
+	})
+
+	advancedSettingsForm := container.NewVBox(
+		widget.NewLabel("Advanced Settings"),
+		widget.NewForm(
+			widget.NewFormItem("Semaphore limit (tabs)", semaphoreEntry),
+			widget.NewFormItem("Rate limiter frequency (milisecond)", rateFreqEntry),
+			widget.NewFormItem("Rate limiter burst", rateBurstEntry),
+		),
+		applyAdvancedBtn,
+	)
+	advancedSettingsForm.Hide()
+
+	checkTemplatesBtn := widget.NewButton("Check templates", func() {
+		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, resultsOutput, createTemplateBtn, advanced, logger)
+	})
+
+	var toggleAdvancedBtn *widget.Button
+	toggleAdvancedBtn = widget.NewButton("Advanced settings", func() {
+		advancedVisible = !advancedVisible
+		if advancedVisible {
+			advancedSettingsForm.Show()
+			toggleAdvancedBtn.SetText("Hide advanced settings")
+		} else {
+			advancedSettingsForm.Hide()
+			toggleAdvancedBtn.SetText("Advanced settings")
+		}
+		parentWindow.Content().Refresh()
+	})
 
 	section := container.NewVBox(
 		widget.NewLabel("Template Checker Section"),
@@ -55,6 +108,8 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 		checkTemplatesBtn,
 		resultsOutput,
 		createTemplateBtn,
+		toggleAdvancedBtn,
+		advancedSettingsForm,
 	)
 
 	return section
@@ -80,6 +135,7 @@ func checkTemplatesAction(
 	templatesDir string,
 	resultsOutput *widget.Entry,
 	createBtn *widget.Button,
+	advanced *templates.AdvancedSettingsChecker,
 	logger *logging.Logger,
 ) {
 	if templatesDir == "" {
@@ -96,17 +152,22 @@ func checkTemplatesAction(
 	resultsOutput.SetText("Starting template check...\n")
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), constants.FiveMinTimeout)
 		defer cancel()
 
+		startTime := time.Now()
+		var totalTemplates int
+
 		progressCallback := func(i, total int) {
+			totalTemplates = total
 			line := fmt.Sprintf("Checked %d of %d templates...", i, total)
 			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
 				resultsOutput.SetText(line)
 			}, true)
 		}
 
-		matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout, logger, progressCallback)
+		matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout, advanced, logger, progressCallback)
+		duration := time.Since(startTime)
 		if err != nil {
 			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
 				dialog.ShowError(err, parentWindow)
@@ -114,7 +175,9 @@ func checkTemplatesAction(
 			return
 		}
 
-		lines := []string{}
+		lines := []string{
+			fmt.Sprintf("Checked %d templates in %s", totalTemplates, duration.Round(time.Second)),
+		}
 
 		fyne.CurrentApp().Driver().DoFromGoroutine(func() {
 			if len(matched) == 0 {

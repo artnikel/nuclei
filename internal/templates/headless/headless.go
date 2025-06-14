@@ -1,24 +1,24 @@
+// Package headless provides utilities for running headless Chrome browser tasks
 package headless
 
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/chromedp/chromedp"
 )
 
 var (
-	once        sync.Once
-	allocCtx    context.Context
-	browserCtx  context.Context
-	initErr     error
-	headlessSem = make(chan struct{}, runtime.NumCPU())
+	once       sync.Once       // ensures headless browser initializes only once
+	allocCtx   context.Context // Chrome exec allocator context
+	browserCtx context.Context // browser context for tabs
+	initErr    error           // error during initialization
 )
 
+// InitHeadless initializes the shared headless Chrome browser context once
 func InitHeadless() error {
 	once.Do(func() {
 		opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -48,18 +48,19 @@ func InitHeadless() error {
 	return initErr
 }
 
-func DoHeadlessRequest(ctx context.Context, fullURL string) (string, error) {
+// DoHeadlessRequest opens a new tab, navigates to fullURL, waits for body, and returns the page HTML
+func DoHeadlessRequest(ctx context.Context, fullURL string, tabs int) (string, error) {
 	if err := InitHeadless(); err != nil {
 		return "", fmt.Errorf("failed to init headless: %w", err)
 	}
-
+	headlessSem := make(chan struct{}, tabs) // semaphore limiting concurrent headless tabs
 	headlessSem <- struct{}{}
 	defer func() { <-headlessSem }()
 
 	tabCtx, cancel := chromedp.NewContext(browserCtx)
 	defer cancel()
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, 60*time.Second)
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, constants.OneMinTimeout)
 	defer timeoutCancel()
 
 	var htmlContent string

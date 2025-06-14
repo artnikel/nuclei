@@ -1,3 +1,4 @@
+// package gui implements the user interface of the project - license status section
 package gui
 
 import (
@@ -10,11 +11,12 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/artnikel/nuclei/internal/config"
-	"github.com/artnikel/nuclei/pkg/license"
+	"github.com/artnikel/nuclei/internal/license"
 )
 
+// BuildLicenseSection creates the UI section for displaying the license status
 func BuildLicenseSection(a fyne.App, w fyne.Window) fyne.CanvasObject {
-	statusLabel := widget.NewLabel("License status unknown")
+	statusLabel := widget.NewLabel("License Status Section")
 	createdAtLabel := widget.NewLabel("")
 	lastCheckLabel := widget.NewLabel("")
 

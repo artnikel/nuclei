@@ -244,6 +244,7 @@ func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bo
 	return length == size
 }
 
+// matchDNSByPattern checks if any DNS record contains the pattern (case-insensitive)
 func matchDNSByPattern(dnsResp *DNSResponse, pattern string) bool {
     if dnsResp == nil {
         return false
@@ -257,16 +258,18 @@ func matchDNSByPattern(dnsResp *DNSResponse, pattern string) bool {
     return false
 }
 
+// matchNetworkByPattern checks if the network response data contains the pattern bytes
 func matchNetworkByPattern(nw *NetworkResponse, pattern string) bool {
 	return bytes.Contains(nw.Data, []byte(pattern))
 }
 
+// matchHeadlessByPattern checks if the headless response HTML matches words or regex patterns
 func matchHeadlessByPattern(resp *HeadlessResponse, m Matcher) bool {
 	html := resp.HTML
 	if html == "" {
 		return false
 	}
-
+	// check if any word from matcher is in HTML (case-insensitive)
 	if len(m.Words) > 0 {
 		for _, w := range m.Words {
 			if strings.Contains(strings.ToLower(html), strings.ToLower(w)) {
@@ -275,7 +278,7 @@ func matchHeadlessByPattern(resp *HeadlessResponse, m Matcher) bool {
 		}
 		return false
 	}
-
+	// check if any regex pattern from matcher matches HTML
 	if len(m.Regex) > 0 {
 		for _, pattern := range m.Regex {
 			re, err := regexp.Compile(pattern)

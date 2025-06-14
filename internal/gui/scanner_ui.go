@@ -228,7 +228,7 @@ func runScan(
 
 	processFn := func(ctx context.Context, target string) error {
 		startTime := time.Now()
-		matched, err := templates.MatchTemplate(ctx, target,"", template, logger)
+		matched, err := templates.MatchTemplate(ctx, target,"", template, &templates.AdvancedSettingsChecker{}, logger)
 		durationMs := time.Since(startTime).Milliseconds()
 
 		atomic.AddInt64(&processed, 1)

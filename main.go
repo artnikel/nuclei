@@ -16,7 +16,7 @@ import (
 	"github.com/artnikel/nuclei/internal/gui"
 	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/security"
-	"github.com/artnikel/nuclei/pkg/license"
+	"github.com/artnikel/nuclei/internal/license"
 )
 
 func main() {
@@ -70,7 +70,7 @@ func main() {
 	)
 	const (
 		width  = 800
-		heigth = 600
+		heigth = 750
 	)
 	w.SetContent(tabs)
 	w.Resize(fyne.NewSize(width, heigth))

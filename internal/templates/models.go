@@ -112,6 +112,7 @@ func (t *Tags) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// NormalizeRequests sets default types and aggregates all raw requests into t.Requests
 func (t *Template) NormalizeRequests() {
 	t.Requests = make([]*Request, 0)
 

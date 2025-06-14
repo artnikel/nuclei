@@ -102,6 +102,7 @@ func escapeYAMLString(s string) string {
 	return s
 }
 
+// canOfflineMatch returns true if the matcher type supports offline matching
 func canOfflineMatch(m Matcher) bool {
 	switch m.Type {
 	case "word", "regex":
@@ -111,6 +112,7 @@ func canOfflineMatch(m Matcher) bool {
 	}
 }
 
+// canOfflineMatchRequest returns true if all matchers in the request support offline matching
 func canOfflineMatchRequest(req *Request) bool {
 	for _, m := range req.Matchers {
 		if !canOfflineMatch(m) {

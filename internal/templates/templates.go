@@ -21,6 +21,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type AdvancedSettingsChecker struct {
+	HeadlessTabs         int
+	RateLimiterFrequency int
+	RateLimiterBurstSize int
+}
+
 // LoadTemplate loads and parses YAML template from the specified path
 func LoadTemplate(path string) (*Template, error) {
 	if !(strings.HasSuffix(path, constants.YamlFileFormat) || strings.HasSuffix(path, constants.YmlFileFormat)) {
@@ -79,7 +85,13 @@ func LoadTemplates(dir string) ([]*Template, error) {
 }
 
 // FindMatchingTemplates searches for matching templates for the specified URL, executing them in parallel
-func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration, logger *logging.Logger, progressCallback func(i, total int)) ([]*Template, error) {
+func FindMatchingTemplates(ctx context.Context,
+	targetURL string,
+	templatesDir string,
+	timeout time.Duration,
+	advanced *AdvancedSettingsChecker,
+	logger *logging.Logger,
+	progressCallback func(i, total int)) ([]*Template, error) {
 	templates, err := LoadTemplates(templatesDir)
 	if err != nil {
 		return nil, err
@@ -91,7 +103,7 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 	}
 	targetHost := parsedURL.Hostname()
 
-	htmlContent, err := headless.DoHeadlessRequest(ctx, targetURL)
+	htmlContent, err := headless.DoHeadlessRequest(ctx, targetURL, advanced.HeadlessTabs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch HTML for %s: %w", targetURL, err)
 	}
@@ -115,7 +127,7 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 		go func(t *Template) {
 			defer wg.Done()
 
-			matches, err := MatchTemplate(ctx, targetURL, htmlContent, t, logger)
+			matches, err := MatchTemplate(ctx, targetURL, htmlContent, t, advanced, logger)
 			if err == nil && matches {
 				mu.Lock()
 				matchedTemplates = append(matchedTemplates, t)
@@ -131,7 +143,7 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 }
 
 // MatchTemplate executes HTTP requests from the template and checks if the response matches the matchers conditions
-func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl *Template, logger *logging.Logger) (bool, error) {
+func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
 	if len(tmpl.Requests) == 0 {
 		return false, fmt.Errorf("template %s has no requests", tmpl.ID)
 	}
@@ -154,7 +166,7 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 					return true, nil
 				}
 			} else {
-				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, logger)
+				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
 				if err != nil {
 					return false, err
 				}
@@ -173,7 +185,7 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 					return true, nil
 				}
 			} else {
-				matched, err := matchHeadlessRequest(ctx, baseURL, req, tmpl, logger)
+				matched, err := matchHeadlessRequest(ctx, baseURL, req, tmpl, advanced, logger)
 				if err != nil {
 					return false, err
 				}

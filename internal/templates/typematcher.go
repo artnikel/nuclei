@@ -1,3 +1,4 @@
+// Package templates - matching logic for various request types
 package templates
 
 import (
@@ -45,25 +46,25 @@ type HeadlessResponse struct {
 }
 
 var (
-	hostLimitersMu sync.Mutex
-	hostLimiters   = make(map[string]*rate.Limiter)
-	rateLimit      = rate.Every(10 * time.Millisecond)
-	burstLimit     = 100
+	hostLimitersMu sync.Mutex                       // hostLimitersMu guards access to hostLimiters map
+	hostLimiters   = make(map[string]*rate.Limiter) // hostLimiters stores rate limiters per hostname
 )
 
-func getHostLimiter(host string) *rate.Limiter {
+// getHostLimiter returns or creates a rate limiter for a given host
+func getHostLimiter(host string, advanced *AdvancedSettingsChecker) *rate.Limiter {
 	hostLimitersMu.Lock()
 	defer hostLimitersMu.Unlock()
 
 	limiter, ok := hostLimiters[host]
 	if !ok {
-		limiter = rate.NewLimiter(rateLimit, burstLimit)
+		limiter = rate.NewLimiter(rate.Every(time.Duration(advanced.RateLimiterFrequency)*time.Millisecond), advanced.RateLimiterBurstSize)
 		hostLimiters[host] = limiter
 	}
 	return limiter
 }
 
-func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, logger *logging.Logger) (bool, error) {
+// matchHTTPRequest performs HTTP requests and matches responses
+func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
 	client := newInsecureHTTPClient(constants.TenSecTimeout)
 
 	method := req.Method
@@ -98,7 +99,7 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			httpReq.Header.Set(k, substituteVariables(v, vars))
 		}
 
-		limiter := getHostLimiter(parsedBaseURL.Hostname())
+		limiter := getHostLimiter(parsedBaseURL.Hostname(), advanced)
 		for {
 			err := limiter.Wait(ctx)
 			if err != nil {
@@ -141,6 +142,7 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 	return false, nil
 }
 
+// matchDNSRequest performs DNS queries and matches the results
 func matchDNSRequest(host string, req *Request, tmpl *Template, logger *logging.Logger) (bool, error) {
 	queryType := "A"
 	if len(req.Path) > 0 {
@@ -217,6 +219,7 @@ func matchDNSRequest(host string, req *Request, tmpl *Template, logger *logging.
 	return matched, nil
 }
 
+// matchNetworkRequest sends data over network connection and matches response
 func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *Template, logger *logging.Logger) (bool, error) {
 	if req.Type != "network" {
 		return false, fmt.Errorf("request type is not network: %s", req.Type)
@@ -270,7 +273,7 @@ func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *T
 	}
 
 	buf := make([]byte, 4096)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(constants.FiveSecTimeout))
 
 	n, err := conn.Read(buf)
 	if err != nil {
@@ -292,7 +295,8 @@ func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *T
 	return matched, nil
 }
 
-func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, logger *logging.Logger) (bool, error) {
+// matchHeadlessRequest runs headless browser requests and matches output
+func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
 	var url string
 	if len(req.Path) > 0 {
 		url = baseURL + req.Path[0]
@@ -300,7 +304,7 @@ func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmp
 		url = baseURL
 	}
 
-	htmlContent, err := headless.DoHeadlessRequest(ctx, url)
+	htmlContent, err := headless.DoHeadlessRequest(ctx, url, advanced.HeadlessTabs)
 	if err != nil {
 		logger.Error.Printf("Headless request failed: %v", err)
 		return false, err
@@ -320,6 +324,7 @@ func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmp
 	return matched, nil
 }
 
+// matchOfflineHTML matches patterns against offline HTML content
 func matchOfflineHTML(html string, req *Request, tmpl *Template, logger *logging.Logger) bool {
 	for _, matcher := range req.Matchers {
 		switch matcher.Type {

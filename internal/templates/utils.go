@@ -15,13 +15,13 @@ import (
 
 // newInsecureHTTTPClient returns HTTP client with TLS-certificate checking disabled
 func newInsecureHTTPClient(timeout time.Duration) *http.Client {
+	tr := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
+	}
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
+		Transport: tr,
+		Timeout:   timeout,
 	}
 }
 
@@ -38,12 +38,25 @@ func buildFullURL(base *url.URL, path string) string {
 	return u.String()
 }
 
-
 // substituteVariables replaces placeholders of the {{key}} form with values from vars
-func substituteVariables(s string, vars map[string]string) string {
+func substituteVariables(s string, vars map[string]interface{}) string {
 	for k, v := range vars {
 		placeholder := fmt.Sprintf("{{%s}}", k)
-		s = strings.ReplaceAll(s, placeholder, v)
+
+		switch val := v.(type) {
+		case string:
+			s = strings.ReplaceAll(s, placeholder, val)
+		case []interface{}:
+			var parts []string
+			for _, item := range val {
+				if strItem, ok := item.(string); ok {
+					parts = append(parts, strItem)
+				}
+			}
+			s = strings.ReplaceAll(s, placeholder, strings.Join(parts, ","))
+		case []string:
+			s = strings.ReplaceAll(s, placeholder, strings.Join(val, ","))
+		}
 	}
 	return s
 }
@@ -87,4 +100,22 @@ func extractHTMLTitle(r io.Reader) string {
 func escapeYAMLString(s string) string {
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	return s
+}
+
+func canOfflineMatch(m Matcher) bool {
+	switch m.Type {
+	case "word", "regex":
+		return true
+	default:
+		return false
+	}
+}
+
+func canOfflineMatchRequest(req *Request) bool {
+	for _, m := range req.Matchers {
+		if !canOfflineMatch(m) {
+			return false
+		}
+	}
+	return true
 }

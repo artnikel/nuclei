@@ -1,4 +1,3 @@
-// package license represents functions for license verification
 package license
 
 import (
@@ -11,20 +10,22 @@ import (
 	"github.com/artnikel/nuclei/internal/constants"
 )
 
-// LicenseClient represents a client to check the license on the remote server
+type License struct {
+	Key       string    `json:"key"`
+	CreatedAt time.Time `json:"created_at"`
+	LastCheck time.Time `json:"last_check"`
+	Active    bool      `json:"active"`
+}
+
 type LicenseClient struct {
 	serverURL  string
 	licenseKey string
 	lastCheck  time.Time
 	isValid    bool
+
+	LicenseData License
 }
 
-// LicenseResponse describes the structure of the response from the licensing server
-type LicenseValidateResponse struct {
-	Status string `json:"status"`
-}
-
-// NewLicenseClient creates a new instance of LicenseClient with the given server URL and license key
 func NewLicenseClient(serverURL, licenseKey string) *LicenseClient {
 	return &LicenseClient{
 		serverURL:  serverURL,
@@ -32,7 +33,6 @@ func NewLicenseClient(serverURL, licenseKey string) *LicenseClient {
 	}
 }
 
-// CheckLicense checks the license on the remote server. Caches the result for 24 hours
 func (lc *LicenseClient) CheckLicense() error {
 	if time.Since(lc.lastCheck) < constants.DayTimeout && lc.isValid {
 		return nil
@@ -57,23 +57,23 @@ func (lc *LicenseClient) CheckLicense() error {
 		return fmt.Errorf("license server returned status: %d", resp.StatusCode)
 	}
 
-	var respData LicenseValidateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+	var lic License
+	if err := json.NewDecoder(resp.Body).Decode(&lic); err != nil {
 		return fmt.Errorf("failed to decode license response: %w", err)
 	}
 
-	if respData.Status != "valid" {
+	if !lic.Active {
 		lc.isValid = false
-		return fmt.Errorf("license invalid: status = %s", respData.Status)
+		return fmt.Errorf("license invalid: license is not active")
 	}
 
 	lc.isValid = true
 	lc.lastCheck = time.Now()
+	lc.LicenseData = lic
 
 	return nil
 }
 
-// IsValid returns a flag indicating the validity of the license after the last check
 func (lc *LicenseClient) IsValid() bool {
 	return lc.isValid
 }

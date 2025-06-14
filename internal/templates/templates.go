@@ -4,20 +4,20 @@ package templates
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"slices"
 
 	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/logging"
+	"github.com/artnikel/nuclei/internal/templates/headless"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +36,7 @@ func LoadTemplate(path string) (*Template, error) {
 	if err := yaml.Unmarshal(bs, tmpl); err != nil {
 		return nil, fmt.Errorf("failed to parse template %s: %w", path, err)
 	}
+	tmpl.NormalizeRequests()
 
 	tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
 	tmpl.Requests = append(tmpl.Requests, tmpl.HTTPRaw...)
@@ -64,6 +65,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 		if err := yaml.Unmarshal(bs, tmpl); err != nil {
 			return fmt.Errorf("failed to parse template %s: %w", path, err)
 		}
+		tmpl.NormalizeRequests()
 		tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
 		tmpl.Requests = append(tmpl.Requests, tmpl.HTTPRaw...)
 
@@ -77,7 +79,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 }
 
 // FindMatchingTemplates searches for matching templates for the specified URL, executing them in parallel
-func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration, logger *logging.Logger) ([]*Template, error) {
+func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir string, timeout time.Duration, logger *logging.Logger, progressCallback func(i, total int)) ([]*Template, error) {
 	templates, err := LoadTemplates(templatesDir)
 	if err != nil {
 		return nil, err
@@ -89,13 +91,23 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 	}
 	targetHost := parsedURL.Hostname()
 
+	htmlContent, err := headless.DoHeadlessRequest(ctx, targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch HTML for %s: %w", targetURL, err)
+	}
+
 	var matchedTemplates []*Template
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	total := len(templates)
+	var counter atomic.Int32
+
 	for _, tmpl := range templates {
 		if !templateMatchesHost(tmpl, targetHost) {
+			current := int(counter.Add(1))
+			progressCallback(current, total)
 			continue
 		}
 
@@ -103,12 +115,14 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 		go func(t *Template) {
 			defer wg.Done()
 
-			matches, err := MatchTemplate(ctx, targetURL, t, logger)
+			matches, err := MatchTemplate(ctx, targetURL, htmlContent, t, logger)
 			if err == nil && matches {
 				mu.Lock()
 				matchedTemplates = append(matchedTemplates, t)
 				mu.Unlock()
 			}
+			current := int(counter.Add(1))
+			progressCallback(current, total)
 		}(tmpl)
 	}
 
@@ -117,61 +131,68 @@ func FindMatchingTemplates(ctx context.Context, targetURL string, templatesDir s
 }
 
 // MatchTemplate executes HTTP requests from the template and checks if the response matches the matchers conditions
-func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *logging.Logger) (bool, error) {
-	client := newInsecureHTTPClient(constants.TenSecTimeout)
+func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl *Template, logger *logging.Logger) (bool, error) {
 	if len(tmpl.Requests) == 0 {
 		return false, fmt.Errorf("template %s has no requests", tmpl.ID)
 	}
 
-	parsedBaseURL, err := url.Parse(baseURL)
+	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
-		return false, fmt.Errorf("invalid target url: %w", err)
+		return false, err
 	}
-
-	baseURLForVars := fmt.Sprintf("%s://%s", parsedBaseURL.Scheme, parsedBaseURL.Host)
-	vars := make(map[string]string)
-	for k, v := range tmpl.Variables {
-		vars[k] = v
-	}
-	vars["BaseURL"] = baseURLForVars
+	host := parsedURL.Hostname()
 
 	for _, req := range tmpl.Requests {
-		method := req.Method
-		if method == "" {
-			method = http.MethodGet
+		var matched bool
+		var err error
+
+		switch req.Type {
+		case "http", "":
+			if canOfflineMatchRequest(req) {
+				matched := matchOfflineHTML(htmlContent, req, tmpl, logger)
+				if matched {
+					return true, nil
+				}
+			} else {
+				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, logger)
+				if err != nil {
+					return false, err
+				}
+				if matched {
+					return true, nil
+				}
+			}
+		case "dns", "CNAME", "NS", "TXT", "A":
+			matched, err = matchDNSRequest(host, req, tmpl, logger)
+		case "network":
+			matched, err = matchNetworkRequest(ctx, host, req, tmpl, logger)
+		case "headless":
+			if canOfflineMatchRequest(req) {
+				matched := matchOfflineHTML(htmlContent, req, tmpl, logger)
+				if matched {
+					return true, nil
+				}
+			} else {
+				matched, err := matchHeadlessRequest(ctx, baseURL, req, tmpl, logger)
+				if err != nil {
+					return false, err
+				}
+				if matched {
+					return true, nil
+				}
+			}
+		default:
+			logger.Info.Printf("Unsupported request type: %s\n", req.Type)
+			continue
 		}
 
-		for _, p := range req.Path {
-			pathWithVars := substituteVariables(p, vars)
-			fullURL := buildFullURL(parsedBaseURL, pathWithVars)
+		if err != nil {
+			logger.Info.Printf("Request failed: %v", err)
+			continue
+		}
 
-			httpReq, err := http.NewRequestWithContext(ctx, method, fullURL, nil)
-			if err != nil {
-				continue
-			}
-
-			for k, v := range req.Headers {
-				httpReq.Header.Set(k, substituteVariables(v, vars))
-			}
-
-			resp, err := client.Do(httpReq)
-			if err != nil {
-				logger.Info.Printf("Request error for %s: %v\n", fullURL, err)
-				continue
-			}
-
-			bodyBytes, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				logger.Info.Printf("Read body error for %s: %v\n", fullURL, err)
-				continue
-			}
-
-			matched := checkMatchers(req.Matchers, req.MatchersCondition, resp, bodyBytes)
-			logger.Info.Printf("Template %s, request %s: matched=%v, status=%d\n", tmpl.ID, fullURL, matched, resp.StatusCode)
-			if matched {
-				return true, nil
-			}
+		if matched {
+			return true, nil
 		}
 	}
 
@@ -179,7 +200,7 @@ func MatchTemplate(ctx context.Context, baseURL string, tmpl *Template, logger *
 }
 
 // checkMatchers checks the list of matchers according to the given condition (and/or)
-func checkMatchers(matchers []Matcher, condition string, resp *http.Response, body []byte) bool {
+func checkMatchers(matchers []Matcher, condition string, ctx MatchContext) bool {
 	if len(matchers) == 0 {
 		return true
 	}
@@ -191,7 +212,7 @@ func checkMatchers(matchers []Matcher, condition string, resp *http.Response, bo
 
 	results := make([]bool, len(matchers))
 	for i, m := range matchers {
-		results[i] = checkSingleMatcher(m, resp, body)
+		results[i] = checkSingleMatcher(m, ctx)
 	}
 
 	if condition == "or" {
@@ -212,24 +233,79 @@ func checkMatchers(matchers []Matcher, condition string, resp *http.Response, bo
 }
 
 // checkSingleMatcher checks a single matcher against the server response
-func checkSingleMatcher(m Matcher, resp *http.Response, body []byte) bool {
+func checkSingleMatcher(m Matcher, ctx MatchContext) bool {
 	switch m.Type {
 	case "status":
-		return slices.Contains(m.Status, resp.StatusCode)
+		if ctx.Resp == nil {
+			return false
+		}
+		return slices.Contains(m.Status, ctx.Resp.StatusCode)
+
 	case "word":
-		return matchWordsByPart(resp, body, m.Words, m.Part, m.Condition, m.NoCase)
+		if ctx.Resp == nil {
+			return false
+		}
+		return matchWordsByPart(ctx.Resp, ctx.Body, m.Words, m.Part, m.Condition, m.NoCase)
+
 	case "regex":
-		return matchRegexByPart(resp, body, m.Regex, m.Part, m.NoCase)
+		if ctx.Resp == nil {
+			return false
+		}
+		return matchRegexListByPart(ctx.Resp, ctx.Body, m.Regex, m.Part, m.NoCase)
+
 	case "size":
-		return matchSizeByPart(resp, body, m.Size, m.Part)
+		if ctx.Resp == nil {
+			return false
+		}
+		return matchSizeByPart(ctx.Resp, ctx.Body, m.Size, m.Part)
+
 	case "dlength":
-		return matchDlengthByPart(resp, body, m.Condition, m.Dlength, m.Part)
+		if ctx.Resp == nil {
+			return false
+		}
+		return matchDlengthByPart(ctx.Resp, ctx.Body, m.Condition, m.Dlength, m.Part)
+
 	case "binary":
-		return matchBinaryByPart(resp, body, []byte(m.Binary), m.Part)
+		if ctx.Resp == nil {
+			return false
+		}
+		var binaries [][]byte
+		for _, b := range m.Binary {
+			binaries = append(binaries, []byte(b))
+		}
+		return matchBinaryByPart(ctx.Resp, ctx.Body, binaries, m.Part)
 	case "xpath":
-		return matchXPathByPart(body, m.XPath)
+		if ctx.Body == nil {
+			return false
+		}
+		for _, xpath := range m.XPath {
+			if matchXPathByPart(ctx.Body, xpath) {
+				return true
+			}
+		}
+		return false
+
 	case "json":
-		return matchJSONByPart(body, m.JSONPath)
+		if ctx.Body == nil {
+			return false
+		}
+		return matchJSONByPart(ctx.Body, m.JSONPath)
+
+	case "dns":
+		if ctx.DNS == nil {
+			return false
+		}
+		return matchDNSByPattern(ctx.DNS, m.Pattern)
+	case "network":
+		if ctx.Network == nil {
+			return false
+		}
+		return matchNetworkByPattern(ctx.Network, m.Pattern)
+	case "headless":
+		if ctx.Headless == nil {
+			return false
+		}
+		return matchHeadlessByPattern(ctx.Headless, m)
 	default:
 		return false
 	}

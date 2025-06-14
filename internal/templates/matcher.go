@@ -14,7 +14,7 @@ import (
 )
 
 // matchBinaryByPart checks for the presence of a binary pattern in the specified part of the response
-func matchBinaryByPart(resp *http.Response, body []byte, pattern []byte, part string) bool {
+func matchBinaryByPart(resp *http.Response, body []byte, patterns [][]byte, part string) bool {
 	var data []byte
 
 	switch strings.ToLower(part) {
@@ -36,8 +36,14 @@ func matchBinaryByPart(resp *http.Response, body []byte, pattern []byte, part st
 		data = body
 	}
 
-	return bytes.Contains(data, pattern)
+	for _, pattern := range patterns {
+		if bytes.Contains(data, pattern) {
+			return true
+		}
+	}
+	return false
 }
+
 
 // matchDlengthByPart compares the length of the data in the answer part with the specified condition
 func matchDlengthByPart(resp *http.Response, body []byte, operator string, length int, part string) bool {
@@ -173,8 +179,8 @@ func matchWordsByPart(resp *http.Response, body []byte, words []string, part, co
 	return false
 }
 
-// matchRegexByPart checks for a match to the regular expression in the answer part
-func matchRegexByPart(resp *http.Response, body []byte, regexStr string, part string, noCase bool) bool {
+// matchRegexListByPart checks for a match to the regular expression in the answer part
+func matchRegexListByPart(resp *http.Response, body []byte, regexList []string, part string, noCase bool) bool {
 	var text string
 
 	switch part {
@@ -198,18 +204,23 @@ func matchRegexByPart(resp *http.Response, body []byte, regexStr string, part st
 		text = string(body)
 	}
 
-	prefix := ""
-	if noCase {
-		prefix = "(?i)"
+	for _, regexStr := range regexList {
+		prefix := ""
+		if noCase {
+			prefix = "(?i)"
+		}
+		re, err := regexp.Compile(prefix + regexStr)
+		if err != nil {
+			continue 
+		}
+		if re.MatchString(text) {
+			return true
+		}
 	}
 
-	re, err := regexp.Compile(prefix + regexStr)
-	if err != nil {
-		return false
-	}
-
-	return re.MatchString(text)
+	return false
 }
+
 
 // matchSizeByPart compares the size of the specified response part with the specified value
 func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bool {
@@ -232,3 +243,53 @@ func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bo
 	}
 	return length == size
 }
+
+func matchDNSByPattern(dnsResp *DNSResponse, pattern string) bool {
+    if dnsResp == nil {
+        return false
+    }
+
+    for _, record := range dnsResp.Records {
+        if strings.Contains(strings.ToLower(record), strings.ToLower(pattern)) {
+            return true
+        }
+    }
+    return false
+}
+
+func matchNetworkByPattern(nw *NetworkResponse, pattern string) bool {
+	return bytes.Contains(nw.Data, []byte(pattern))
+}
+
+func matchHeadlessByPattern(resp *HeadlessResponse, m Matcher) bool {
+	html := resp.HTML
+	if html == "" {
+		return false
+	}
+
+	if len(m.Words) > 0 {
+		for _, w := range m.Words {
+			if strings.Contains(strings.ToLower(html), strings.ToLower(w)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(m.Regex) > 0 {
+		for _, pattern := range m.Regex {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				continue
+			}
+			if re.MatchString(html) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return false
+}
+
+

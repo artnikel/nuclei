@@ -4,7 +4,9 @@ package gui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -23,7 +25,11 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 	urlEntry.SetPlaceHolder("Enter URL to check templates")
 
 	templateCheckLabel := widget.NewLabel("Template folder: (not selected)")
-	templateResultsLabel := widget.NewLabel("")
+
+	resultsOutput := widget.NewMultiLineEntry()
+	resultsOutput.SetMinRowsVisible(10)
+	resultsOutput.Wrapping = fyne.TextWrapWord
+
 	createTemplateBtn := widget.NewButton("Create new template", nil)
 	createTemplateBtn.Disable()
 
@@ -34,7 +40,7 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 	})
 
 	checkTemplatesBtn := widget.NewButton("Check templates", func() {
-		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, templateResultsLabel, createTemplateBtn, logger)
+		checkTemplatesAction(parentWindow, urlEntry, checkTemplatesDir, resultsOutput, createTemplateBtn, logger)
 	})
 
 	createTemplateBtn.OnTapped = func() {
@@ -43,10 +49,11 @@ func BuildTemplateCheckerSection(a fyne.App, parentWindow fyne.Window, logger *l
 
 	section := container.NewVBox(
 		widget.NewLabel("Template Checker Section"),
-		container.NewStack(urlEntry),
-		selectTemplateCheckDirBtn, templateCheckLabel,
+		urlEntry,
+		selectTemplateCheckDirBtn,
+		templateCheckLabel,
 		checkTemplatesBtn,
-		templateResultsLabel,
+		resultsOutput,
 		createTemplateBtn,
 	)
 
@@ -62,12 +69,19 @@ func selectTemplatesFolder(parentWindow fyne.Window, dir *string, label *widget.
 		*dir = uri.Path()
 		label.SetText("Template folder: " + *dir)
 	}, parentWindow)
-	fd.Resize(fyne.NewSize(800, 600)) // задаём размер окна
+	fd.Resize(fyne.NewSize(800, 600))
 	fd.Show()
 }
 
 // checkTemplatesAction checks for matching templates for a given URL and updates the interface
-func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, templatesDir string, resultsLabel *widget.Label, createBtn *widget.Button, logger *logging.Logger) {
+func checkTemplatesAction(
+	parentWindow fyne.Window,
+	urlEntry *widget.Entry,
+	templatesDir string,
+	resultsOutput *widget.Entry,
+	createBtn *widget.Button,
+	logger *logging.Logger,
+) {
 	if templatesDir == "" {
 		dialog.ShowInformation("Error", "Please select a templates folder", parentWindow)
 		return
@@ -78,27 +92,45 @@ func checkTemplatesAction(parentWindow fyne.Window, urlEntry *widget.Entry, temp
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), constants.TenSecTimeout)
-	defer cancel()
+	createBtn.Disable()
+	resultsOutput.SetText("Starting template check...\n")
 
-	matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout, logger)
-	if err != nil {
-		dialog.ShowError(err, parentWindow)
-		return
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 
-	if len(matched) == 0 {
-		resultsLabel.SetText("No matching templates found.\nYou can create a new template.")
-		createBtn.Enable()
-	} else {
-		var resultStr strings.Builder
-		resultStr.WriteString("Matching templates:\n")
-		for _, tmpl := range matched {
-			resultStr.WriteString(tmpl.ID + "\n")
+		progressCallback := func(i, total int) {
+			line := fmt.Sprintf("Checked %d of %d templates...", i, total)
+			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
+				resultsOutput.SetText(line)
+			}, true)
 		}
-		resultsLabel.SetText(resultStr.String())
-		createBtn.Disable()
-	}
+
+		matched, err := templates.FindMatchingTemplates(ctx, url, templatesDir, constants.FiveSecTimeout, logger, progressCallback)
+		if err != nil {
+			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
+				dialog.ShowError(err, parentWindow)
+			}, true)
+			return
+		}
+
+		lines := []string{}
+
+		fyne.CurrentApp().Driver().DoFromGoroutine(func() {
+			if len(matched) == 0 {
+				lines = append(lines, "No matching templates found.\nYou can create a new template.")
+				resultsOutput.SetText(strings.Join(lines, "\n"))
+				createBtn.Enable()
+			} else {
+				lines = append(lines, "\nTotal matching: "+strconv.Itoa(len(matched)))
+				lines = append(lines, "\nMatching templates:")
+				for _, tmpl := range matched {
+					lines = append(lines, tmpl.ID)
+				}
+				resultsOutput.SetText(strings.Join(lines, "\n"))
+			}
+		}, true)
+	}()
 }
 
 // createTemplateAction generates a template for the specified URL and offers to save it to a file

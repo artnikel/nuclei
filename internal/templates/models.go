@@ -9,19 +9,24 @@ import (
 )
 
 type Template struct {
-	ID             string            `yaml:"id"`
-	Info           Info              `yaml:"info"`
-	Tags           Tags              `yaml:"tags,omitempty"`
-	Authors        []string          `yaml:"authors,omitempty"`
-	Severity       string            `yaml:"severity,omitempty"`
-	Description    string            `yaml:"description,omitempty"`
-	Reference      []string          `yaml:"reference,omitempty"`
-	Classification map[string]string `yaml:"classification,omitempty"`
-	Metadata       map[string]string `yaml:"metadata,omitempty"`
-	Variables      map[string]string `yaml:"variables,omitempty"`
+	ID               string                 `yaml:"id"`
+	Info             Info                   `yaml:"info"`
+	Tags             Tags                   `yaml:"tags,omitempty"`
+	Authors          []string               `yaml:"authors,omitempty"`
+	Severity         string                 `yaml:"severity,omitempty"`
+	Description      string                 `yaml:"description,omitempty"`
+	Reference        []string               `yaml:"reference,omitempty"`
+	Classification   map[string]string      `yaml:"classification,omitempty"`
+	Metadata         map[string]string      `yaml:"metadata,omitempty"`
+	Variables        map[string]interface{} `yaml:"variables,omitempty"`
+	StopAtFirstMatch bool                   `yaml:"stop-at-first-match,omitempty"`
+	RequestCondition string                 `yaml:"req-condition,omitempty"`
 
 	RequestsRaw []*Request `yaml:"requests,omitempty"`
 	HTTPRaw     []*Request `yaml:"http,omitempty"`
+	DNSRaw      []*Request `yaml:"dns,omitempty"`
+	NetworkRaw  []*Request `yaml:"network,omitempty"`
+	HeadlessRaw []*Request `yaml:"headless,omitempty"`
 
 	Requests []*Request `yaml:"-"`
 
@@ -37,26 +42,32 @@ type Info struct {
 }
 
 type Request struct {
-	Method            string            `yaml:"method"`
-	Path              []string          `yaml:"path"`
-	Headers           map[string]string `yaml:"headers,omitempty"`
-	Matchers          []Matcher         `yaml:"matchers,omitempty"`
-	MatchersCondition string            `yaml:"matchers-condition,omitempty"`
-	Extractors        []Extractor       `yaml:"extractors,omitempty"`
-	Attack            *Attack           `yaml:"attack,omitempty"`
+	Type              string                 `yaml:"type,omitempty"`
+	Method            string                 `yaml:"method"`
+	Path              []string               `yaml:"path"`
+	Headers           map[string]string      `yaml:"headers,omitempty"`
+	Matchers          []Matcher              `yaml:"matchers,omitempty"`
+	MatchersCondition string                 `yaml:"matchers-condition,omitempty"`
+	Extractors        []Extractor            `yaml:"extractors,omitempty"`
+	Attack            string                 `yaml:"attack,omitempty"`
+	Payloads          map[string]interface{} `yaml:"payloads,omitempty"`
+	Pipeline          bool                   `yaml:"pipeline,omitempty"`
+	Options           map[string]interface{} `yaml:"options,omitempty"`
+	Preconditions     []Condition            `yaml:"pre-condition,omitempty"`
 }
 
 type Matcher struct {
-	Type      string   `yaml:"type"`
+	Type      string   `yaml:"type,omitempty"`
+	Pattern   string   `yaml:"pattern,omitempty"`
 	Part      string   `yaml:"part,omitempty"`
 	Words     []string `yaml:"words,omitempty"`
 	Status    []int    `yaml:"status,omitempty"`
 	Condition string   `yaml:"condition,omitempty"`
-	Regex     string   `yaml:"regex,omitempty"`
+	Regex     []string `yaml:"regex,omitempty"`
 	Size      int      `yaml:"size,omitempty"`
 	Dlength   int      `yaml:"dlength,omitempty"`
-	Binary    string   `yaml:"binary,omitempty"`
-	XPath     string   `yaml:"xpath,omitempty"`
+	Binary    []string   `yaml:"binary,omitempty"`
+	XPath     []string   `yaml:"xpath,omitempty"`
 	JSONPath  string   `yaml:"jsonpath,omitempty"`
 	NoCase    bool     `yaml:"nocase,omitempty"`
 }
@@ -68,15 +79,14 @@ type Extractor struct {
 	Regex    []string `yaml:"regex,omitempty"`
 	Name     string   `yaml:"name,omitempty"`
 	NoCase   bool     `yaml:"nocase,omitempty"`
-	XPath    string   `yaml:"xpath,omitempty"`
+	XPath    []string   `yaml:"xpath,omitempty"`
 	JSONPath string   `yaml:"jsonpath,omitempty"`
 	Base64   bool     `yaml:"base64,omitempty"`
 }
 
-type Attack struct {
-	Payloads map[string][]string `yaml:"payloads,omitempty"`
-	Headers  map[string]string   `yaml:"headers,omitempty"`
-	Raw      string              `yaml:"raw,omitempty"`
+type Condition struct {
+	Type string   `yaml:"type,omitempty"`
+	DSL  []string `yaml:"dsl,omitempty"`
 }
 
 type Tags []string
@@ -100,4 +110,36 @@ func (t *Tags) UnmarshalYAML(value *yaml.Node) error {
 		return fmt.Errorf("unexpected yaml node kind for Tags: %v", value.Kind)
 	}
 	return nil
+}
+
+// NormalizeRequests sets default types and aggregates all raw requests into t.Requests
+func (t *Template) NormalizeRequests() {
+	t.Requests = make([]*Request, 0)
+
+	for _, r := range t.HTTPRaw {
+		if r.Type == "" {
+			r.Type = "http"
+		}
+		t.Requests = append(t.Requests, r)
+	}
+
+	for _, r := range t.DNSRaw {
+		if r.Type == "" {
+			r.Type = "dns"
+		}
+		t.Requests = append(t.Requests, r)
+	}
+
+	for _, r := range t.NetworkRaw {
+		if r.Type == "" {
+			r.Type = "network"
+		}
+		t.Requests = append(t.Requests, r)
+	}
+	for _, r := range t.HeadlessRaw {
+		if r.Type == "" {
+			r.Type = "headless"
+		}
+		t.Requests = append(t.Requests, r)
+	}
 }

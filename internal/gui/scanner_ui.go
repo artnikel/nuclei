@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,12 +21,13 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/artnikel/nuclei/internal/constants"
+	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/scanner"
 	"github.com/artnikel/nuclei/internal/templates"
 )
 
 // BuildScannerSection builds the scanner UI section and returns it along with the start flag and cancel function
-func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
+func BuildScannerSection(a fyne.App, w fyne.Window, logger *logging.Logger) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
 	var targetsFile string
 	var templatesDir string
 
@@ -38,10 +38,10 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	templatesLabel := widget.NewLabel("Templates: (not selected)")
 
 	selectTargetsBtn := newSelectTargetsButton(w, &targetsFile, targetsLabel)
-	selectTemplatesBtn := newSelectTemplatesButton(w, &templatesDir, templatesLabel)
+	selectTemplatesBtn := newSelectTemplateButton(w, &templatesDir, templatesLabel)
 
 	maxThreads := runtime.NumCPU()
-	threadsSelect := newThreadsSelect(maxThreads)
+	threadsEntry := newThreadsEntry(maxThreads)
 	timeoutEntry := newTimeoutEntry()
 
 	statsBinding := binding.NewString()
@@ -53,7 +53,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 	stopBtn.Disable()
 
 	startBtn.OnTapped = func() {
-		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsSelect, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan)
+		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsEntry, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan, logger)
 	}
 
 	stopBtn.OnTapped = func() {
@@ -67,7 +67,7 @@ func BuildScannerSection(a fyne.App, w fyne.Window) (fyne.CanvasObject, *atomic.
 		selectTargetsBtn, targetsLabel,
 		selectTemplatesBtn, templatesLabel,
 		widget.NewForm(
-			widget.NewFormItem("Number of threads", threadsSelect),
+			widget.NewFormItem("Number of threads", threadsEntry),
 			widget.NewFormItem("Timeout (seconds)", timeoutEntry),
 		),
 		container.NewHBox(startBtn, stopBtn),
@@ -87,34 +87,40 @@ func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.La
 			*targetsFile = reader.URI().Path()
 			label.SetText("Targets: " + *targetsFile)
 		}, w)
+		fd.Resize(fyne.NewSize(800, 600))
 		fd.SetFilter(storage.NewExtensionFileFilter([]string{constants.TxtFileFormat}))
 		fd.Show()
 	})
 }
 
-// newSelectTemplatesButton creates a button to select a template directory
-func newSelectTemplatesButton(w fyne.Window, templatesDir *string, label *widget.Label) *widget.Button {
-	return widget.NewButton("Select templates folder", func() {
-		fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
-			if err != nil || uri == nil {
+// newSelectTemplateButton creates a button to select a template directory
+func newSelectTemplateButton(w fyne.Window, templatesFile *string, label *widget.Label) *widget.Button {
+	return widget.NewButton("Select template (.yaml/.yml)", func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
 				return
 			}
-			*templatesDir = uri.Path()
-			label.SetText("Templates: " + *templatesDir)
+			*templatesFile = reader.URI().Path()
+			label.SetText("Template: " + *templatesFile)
 		}, w)
+		fd.Resize(fyne.NewSize(800, 600))
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{constants.YamlFileFormat, constants.YmlFileFormat}))
 		fd.Show()
 	})
 }
 
-// newThreadsSelect creates a drop-down list with a selection of the number of threads
-func newThreadsSelect(maxThreads int) *widget.Select {
-	options := []string{}
-	for i := 1; i <= maxThreads; i++ {
-		options = append(options, strconv.Itoa(i))
+// newThreadsSelect creates a field for entering the number of threads
+func newThreadsEntry(defaultThreads int) *widget.Entry {
+	entry := widget.NewEntry()
+	entry.SetText(strconv.Itoa(defaultThreads))
+	entry.Validator = func(s string) error {
+		_, err := strconv.Atoi(s)
+		if err != nil {
+			return fmt.Errorf("invalid number")
+		}
+		return nil
 	}
-	selectWidget := widget.NewSelect(options, nil)
-	selectWidget.SetSelected(strconv.Itoa(maxThreads))
-	return selectWidget
+	return entry
 }
 
 // newTimeoutEntry creates a field for entering the timeout value in seconds
@@ -133,20 +139,21 @@ func initialStatsText() string {
 func handleStartButtonClick(
 	a fyne.App,
 	w fyne.Window,
-	targetsFile, templatesDir string,
-	threadsSelect *widget.Select,
+	targetsFile, templateFile string,
+	threadsEntry *widget.Entry,
 	timeoutEntry *widget.Entry,
 	statsBinding binding.String,
 	isRunning *atomic.Bool,
 	startBtn, stopBtn *widget.Button,
 	cancelScan *context.CancelFunc,
+	logger *logging.Logger,
 ) {
 	if isRunning.Load() {
 		dialog.ShowInformation("Scanner running", "Scanner is already running", w)
 		return
 	}
 
-	threads, err := strconv.Atoi(threadsSelect.Selected)
+	threads, err := strconv.Atoi(threadsEntry.Text)
 	if err != nil || threads <= 0 {
 		dialog.ShowError(fmt.Errorf("invalid thread count"), w)
 		return
@@ -162,14 +169,14 @@ func handleStartButtonClick(
 		dialog.ShowError(fmt.Errorf("targets file not selected"), w)
 		return
 	}
-	if templatesDir == "" {
+	if templateFile == "" {
 		dialog.ShowError(fmt.Errorf("templates folder not selected"), w)
 		return
 	}
-
-	allTemplates, err := loadAllTemplates(templatesDir)
+	template, err := templates.LoadTemplate(templateFile)
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to load templates: %w", err), w)
+		logger.Error.Printf("failed to load template: %v", err)
+		dialog.ShowError(fmt.Errorf("failed to load template: %w", err), w)
 		return
 	}
 
@@ -183,41 +190,7 @@ func handleStartButtonClick(
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsBinding(statsBinding, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, allTemplates, statsUpdateCh, a, isRunning, startBtn, stopBtn)
-}
-
-// loadAllTemplates recursively loads all YAML templates from the specified directory
-func loadAllTemplates(templatesDir string) ([]*templates.Template, error) {
-	paths := []string{}
-	err := filepath.Walk(templatesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && (strings.HasSuffix(path, constants.YamlFileFormat) || strings.HasSuffix(path, constants.YmlFileFormat)) {
-			paths = append(paths, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var templatesList []*templates.Template
-
-	for _, dir := range paths {
-		tpls, err := templates.LoadTemplates(dir)
-		if err != nil {
-			log.Printf("failed to load templates from %s: %v", dir, err)
-			continue
-		}
-		templatesList = append(templatesList, tpls...)
-	}
-
-	if len(templatesList) == 0 {
-		return nil, fmt.Errorf("no templates loaded from directory")
-	}
-
-	return templatesList, nil
+	go runScan(ctx, targetsFile, threads, template, statsUpdateCh, a, isRunning, startBtn, stopBtn, logger)
 }
 
 // updateStatsBinding listens to the update channel and updates the statistics string binding
@@ -232,11 +205,12 @@ func runScan(
 	ctx context.Context,
 	targetsFile string,
 	threads int,
-	allTemplates []*templates.Template,
+	template *templates.Template,
 	statsUpdateCh chan<- string,
 	a fyne.App,
 	isRunning *atomic.Bool,
 	startBtn, stopBtn *widget.Button,
+	logger *logging.Logger,
 ) {
 	defer func() {
 		close(statsUpdateCh)
@@ -247,48 +221,40 @@ func runScan(
 		}, true)
 	}()
 
-	var totalTargets int64
-	var processed int64
-	var success int64
-	var errors int64
-	var totalDuration int64
-
+	var totalTargets, processed, success, errors, totalDuration int64
 	targetsChan := make(chan string, 1000)
 
 	go feedTargets(ctx, targetsFile, targetsChan, &totalTargets)
 
-	for _, tpl := range allTemplates {
-		tplCopy := tpl
-		processFn := func(ctx context.Context, target string) error {
-			startTime := time.Now()
-			matched, err := templates.MatchTemplate(ctx, target, tplCopy)
-			durationMs := time.Since(startTime).Milliseconds()
+	processFn := func(ctx context.Context, target string) error {
+		startTime := time.Now()
+		matched, err := templates.MatchTemplate(ctx, target,"", template, &templates.AdvancedSettingsChecker{}, logger)
+		durationMs := time.Since(startTime).Milliseconds()
 
-			atomic.AddInt64(&processed, 1)
-			atomic.AddInt64(&totalDuration, durationMs)
+		atomic.AddInt64(&processed, 1)
+		atomic.AddInt64(&totalDuration, durationMs)
 
-			if err != nil {
-				log.Printf("Error processing target %s: %v\n", target, err)
-				atomic.AddInt64(&errors, 1)
-				return err
-			}
-
-			if matched {
-				atomic.AddInt64(&success, 1)
-				return nil
-			}
-
+		if err != nil {
+			logger.Info.Printf("Error processing target %s: %v\n", target, err)
 			atomic.AddInt64(&errors, 1)
-			return fmt.Errorf("no match found")
+			return err
 		}
 
-		resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn)
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-resultsDone:
+		if matched {
+			atomic.AddInt64(&success, 1)
+			return nil
 		}
+
+		atomic.AddInt64(&errors, 1)
+		return fmt.Errorf("no match found")
+	}
+
+	resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn, logger)
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-resultsDone:
 	}
 
 	statsUpdateCh <- "Scan finished.\n" + formatStats(totalTargets, processed, success, errors, totalDuration)
@@ -332,3 +298,4 @@ func formatStats(totalTargets, processed, success, errors, totalDuration int64) 
 		totalTargets, processed, success, errors, avgMs,
 	)
 }
+

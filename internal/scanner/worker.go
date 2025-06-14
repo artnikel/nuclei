@@ -3,8 +3,9 @@ package scanner
 
 import (
 	"context"
-	"fmt"
 	"sync"
+
+	"github.com/artnikel/nuclei/internal/logging"
 )
 
 // ProcessTargetFunc defines a function for processing one target (target)
@@ -12,7 +13,7 @@ type ProcessTargetFunc func(ctx context.Context, target string) error
 
 // StartWorkers starts the specified number of Workers that process targets from the targetsCh channel in parallel.
 // Returns the channel that will be closed after all Workers are finished
-func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, processFn ProcessTargetFunc) <-chan struct{} {
+func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, processFn ProcessTargetFunc, logger *logging.Logger) <-chan struct{} {
 	doneCh := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -31,7 +32,7 @@ func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, pro
 					}
 					err := processFn(ctx, target)
 					if err != nil {
-						fmt.Printf("Error processing target %s: %v\n", target, err)
+						//logger.Info.Printf("Error processing target %s: %v\n", target, err)
 					}
 				}
 			}

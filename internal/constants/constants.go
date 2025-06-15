@@ -9,6 +9,7 @@ const (
 	TenSecTimeout  = 10 * time.Second
 	OneMinTimeout = 1 * time.Minute
 	FiveMinTimeout = 5 * time.Minute
+	TenMinTimeout = 10 * time.Minute
 	DayTimeout     = 24 * time.Hour
 	// File formats
 	TxtFileFormat = ".txt"

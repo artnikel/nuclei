@@ -3,9 +3,11 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"os"
@@ -20,31 +22,42 @@ import (
 
 // TemplateCheckerPageWidget holds all the widgets for the template checker section
 type TemplateCheckerPageWidget struct {
-	URLEntry                *walk.LineEdit
-	TemplateCheckLabel      *walk.Label
-	ResultsOutput           *walk.TextEdit
-	CreateTemplateBtn       *walk.PushButton
-	SelectTemplateDirBtn    *walk.PushButton
-	CheckTemplatesBtn       *walk.PushButton
-	ToggleAdvancedBtn       *walk.PushButton
-	SemaphoreEntry          *walk.LineEdit
-	RateFreqEntry           *walk.LineEdit
-	RateBurstEntry          *walk.LineEdit
-	ApplyAdvancedBtn        *walk.PushButton
-	AdvancedGroup           *walk.GroupBox
+	URLEntry             *walk.LineEdit
+	TemplateCheckLabel   *walk.Label
+	ResultsOutput        *walk.TextEdit
+	CreateTemplateBtn    *walk.PushButton
+	SelectTemplateDirBtn *walk.PushButton
+	CheckTemplatesBtn    *walk.PushButton
+	ToggleAdvancedBtn    *walk.PushButton
+	SemaphoreEntry       *walk.LineEdit
+	RateFreqEntry        *walk.LineEdit
+	RateBurstEntry       *walk.LineEdit
+	ThreadsEntry         *walk.LineEdit
+	TimeoutEntry         *walk.LineEdit
+	ApplyAdvancedBtn     *walk.PushButton
+	AdvancedGroup        *walk.GroupBox
+	StopBtn              *walk.PushButton
 }
 
 var (
 	templateCheckerWidget TemplateCheckerPageWidget
 	checkTemplatesDir     string
 	advancedVisible       bool
-	advanced              = &templates.AdvancedSettingsChecker{}
+	isChecking            = &atomic.Bool{}
+	cancelCheck           context.CancelFunc
+	advanced              = &templates.AdvancedSettingsChecker{
+		HeadlessTabs:         10,
+		RateLimiterFrequency: 10,
+		RateLimiterBurstSize: 100,
+		Threads:              300,
+		Timeout:              500 * time.Second,
+	}
 )
 
 // BuildTemplateCheckerSection creates a UI section for checking and generating templates from URLs
 func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateCheckerPageWidget) {
 	page := TabPage{
-		Title: "Template Checker",
+		Title:  "Template Checker",
 		Layout: VBox{},
 		Children: []Widget{
 			Label{
@@ -52,14 +65,14 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 				Font: Font{Bold: true, PointSize: 12},
 			},
 			VSpacer{Size: 10},
-			
+
 			LineEdit{
-				AssignTo:    &templateCheckerWidget.URLEntry,
-				Text:        "",
-				CueBanner:   "Enter URL to check templates",
+				AssignTo:  &templateCheckerWidget.URLEntry,
+				Text:      "",
+				CueBanner: "Enter URL to check templates",
 			},
 			VSpacer{Size: 10},
-			
+
 			PushButton{
 				AssignTo: &templateCheckerWidget.SelectTemplateDirBtn,
 				Text:     "Select templates folder for checking",
@@ -70,22 +83,34 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 				Text:     "Template folder: (not selected)",
 			},
 			VSpacer{Size: 10},
-			
-			PushButton{
-				AssignTo: &templateCheckerWidget.CheckTemplatesBtn,
-				Text:     "Check templates",
-				MinSize:  Size{150, 30},
+
+			Composite{
+				Layout: HBox{},
+				Children: []Widget{
+					PushButton{
+						AssignTo: &templateCheckerWidget.CheckTemplatesBtn,
+						Text:     "Check templates",
+						MinSize:  Size{150, 30},
+					},
+					PushButton{
+						AssignTo: &templateCheckerWidget.StopBtn,
+						Text:     "Stop",
+						MinSize:  Size{80, 30},
+						Enabled:  false,
+					},
+				},
 			},
 			VSpacer{Size: 10},
-			
+
 			TextEdit{
 				AssignTo: &templateCheckerWidget.ResultsOutput,
 				MinSize:  Size{0, 200},
 				VScroll:  true,
 				ReadOnly: true,
+				HScroll:  false,
 			},
 			VSpacer{Size: 10},
-			
+
 			PushButton{
 				AssignTo: &templateCheckerWidget.CreateTemplateBtn,
 				Text:     "Create new template",
@@ -93,13 +118,13 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 				Enabled:  false,
 			},
 			VSpacer{Size: 10},
-			
+
 			PushButton{
 				AssignTo: &templateCheckerWidget.ToggleAdvancedBtn,
 				Text:     "Advanced settings",
 				MinSize:  Size{150, 30},
 			},
-			
+
 			GroupBox{
 				AssignTo: &templateCheckerWidget.AdvancedGroup,
 				Title:    "Advanced Settings",
@@ -123,6 +148,16 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 							LineEdit{
 								AssignTo: &templateCheckerWidget.RateBurstEntry,
 								Text:     "100",
+							},
+							Label{Text: "Threads:"},
+							LineEdit{
+								AssignTo: &templateCheckerWidget.ThreadsEntry,
+								Text:     "300",
+							},
+							Label{Text: "Timeout (seconds):"},
+							LineEdit{
+								AssignTo: &templateCheckerWidget.TimeoutEntry,
+								Text:     "500",
 							},
 						},
 					},
@@ -161,6 +196,11 @@ func InitializeTemplateCheckerSection(widget *TemplateCheckerPageWidget, parent 
 	widget.ApplyAdvancedBtn.Clicked().Attach(func() {
 		applyAdvancedSettings(parent, widget)
 	})
+	widget.StopBtn.Clicked().Attach(func() {
+		if cancelCheck != nil {
+			cancelCheck()
+		}
+	})
 }
 
 // selectTemplatesFolder opens the dialog box for selecting a folder with templates and updates the path
@@ -183,7 +223,7 @@ func selectTemplatesFolder(parent walk.Form, widget *TemplateCheckerPageWidget) 
 func toggleAdvancedSettings(widget *TemplateCheckerPageWidget) {
 	advancedVisible = !advancedVisible
 	widget.AdvancedGroup.SetVisible(advancedVisible)
-	
+
 	if advancedVisible {
 		widget.ToggleAdvancedBtn.SetText("Hide advanced settings")
 	} else {
@@ -196,8 +236,10 @@ func applyAdvancedSettings(parent walk.Form, widget *TemplateCheckerPageWidget) 
 	headlessTabs, err1 := strconv.Atoi(widget.SemaphoreEntry.Text())
 	rateFreq, err2 := strconv.Atoi(widget.RateFreqEntry.Text())
 	burstSize, err3 := strconv.Atoi(widget.RateBurstEntry.Text())
+	threads, err4 := strconv.Atoi(widget.ThreadsEntry.Text())
+	timeout, err5 := strconv.Atoi(widget.TimeoutEntry.Text())
 
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 		walk.MsgBox(parent, "Error", "Incorrect values", walk.MsgBoxIconError)
 		return
 	}
@@ -205,47 +247,95 @@ func applyAdvancedSettings(parent walk.Form, widget *TemplateCheckerPageWidget) 
 	advanced.HeadlessTabs = headlessTabs
 	advanced.RateLimiterFrequency = rateFreq
 	advanced.RateLimiterBurstSize = burstSize
+	advanced.Threads = threads
+	advanced.Timeout = time.Duration(timeout) * time.Second
 
 	walk.MsgBox(parent, "Success", "Settings changed", walk.MsgBoxIconInformation)
 }
 
 // checkTemplatesAction checks for matching templates for a given URL and updates the interface
 func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, logger *logging.Logger) {
-	if checkTemplatesDir == "" {
-		walk.MsgBox(parent, "Error", "Please select a templates folder", walk.MsgBoxIconInformation)
-		return
-	}
-	
-	url := strings.TrimSpace(widget.URLEntry.Text())
-	if url == "" {
-		walk.MsgBox(parent, "Error", "Please enter a URL", walk.MsgBoxIconInformation)
+	if isRunning.Load() {
+		walk.MsgBox(parent, "Checker running", "Checker is already running", walk.MsgBoxIconInformation)
 		return
 	}
 
+	if checkTemplatesDir == "" {
+		widget.ResultsOutput.Synchronize(func() {
+			walk.MsgBox(parent, "Error", "Please select a templates folder", walk.MsgBoxIconInformation)
+		})
+		return
+	}
+
+	url := strings.TrimSpace(widget.URLEntry.Text())
+	if url == "" {
+		widget.ResultsOutput.Synchronize(func() {
+			walk.MsgBox(parent, "Error", "Please enter a URL", walk.MsgBoxIconInformation)
+		})
+		return
+	}
+	isChecking.Store(true)
+	widget.StopBtn.SetEnabled(true)
+	widget.CheckTemplatesBtn.SetEnabled(false)
 	widget.CreateTemplateBtn.SetEnabled(false)
 	widget.ResultsOutput.SetText("Starting template check...\n")
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), constants.FiveMinTimeout)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), advanced.Timeout)
+	cancelCheck = cancel
+
+		go func() {
+		defer func() {
+			isChecking.Store(false)
+			widget.StopBtn.SetEnabled(false)
+			widget.CheckTemplatesBtn.SetEnabled(true)
+		}()
 
 		startTime := time.Now()
 		var totalTemplates int
+		var currentChecked atomic.Int32
 
+		// Прогресс обновляется из MatchTemplate
 		progressCallback := func(i, total int) {
+			currentChecked.Store(int32(i))
 			totalTemplates = total
-			line := fmt.Sprintf("Checked %d of %d templates...", i, total)
-			widget.ResultsOutput.Synchronize(func() {
-				widget.ResultsOutput.SetText(line)
-			})
 		}
+
+		// Обновление UI каждую секунду
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		done := make(chan struct{})
+
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-done:
+					return
+				case <-ticker.C:
+					checked := currentChecked.Load()
+					elapsed := time.Since(startTime).Round(time.Second)
+					line := fmt.Sprintf("Checked %d of %d templates... (%s elapsed)", checked, totalTemplates, elapsed)
+
+					widget.ResultsOutput.Synchronize(func() {
+						widget.ResultsOutput.SetText(line)
+					})
+				}
+			}
+		}()
 
 		matched, err := templates.FindMatchingTemplates(ctx, url, checkTemplatesDir, constants.FiveSecTimeout, advanced, logger, progressCallback)
 		duration := time.Since(startTime)
-		
+		close(done)
+
 		if err != nil {
 			widget.ResultsOutput.Synchronize(func() {
-				walk.MsgBox(parent, "Error", err.Error(), walk.MsgBoxIconError)
+				if errors.Is(err, context.Canceled) {
+					widget.ResultsOutput.SetText("Template checking was canceled.")
+				} else {
+					walk.MsgBox(parent, "Error", err.Error(), walk.MsgBoxIconError)
+				}
 			})
 			return
 		}
@@ -263,12 +353,14 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 				lines = append(lines, "\nTotal matching: "+strconv.Itoa(len(matched)))
 				lines = append(lines, "\nMatching templates:")
 				for _, tmpl := range matched {
-					lines = append(lines, tmpl.ID)
+					lines = append(lines, " "+tmpl.ID)
 				}
-				widget.ResultsOutput.SetText(strings.Join(lines, "\n"))
+				result := strings.Join(lines, "\n")
+				widget.ResultsOutput.SetText(result)
 			}
 		})
 	}()
+
 }
 
 // createTemplateAction generates a template for the specified URL and offers to save it to a file

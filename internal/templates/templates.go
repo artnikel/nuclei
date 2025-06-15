@@ -25,6 +25,8 @@ type AdvancedSettingsChecker struct {
 	HeadlessTabs         int
 	RateLimiterFrequency int
 	RateLimiterBurstSize int
+	Threads              int
+	Timeout              time.Duration
 }
 
 // LoadTemplate loads and parses YAML template from the specified path
@@ -92,6 +94,7 @@ func FindMatchingTemplates(ctx context.Context,
 	advanced *AdvancedSettingsChecker,
 	logger *logging.Logger,
 	progressCallback func(i, total int)) ([]*Template, error) {
+
 	templates, err := LoadTemplates(templatesDir)
 	if err != nil {
 		return nil, err
@@ -103,29 +106,44 @@ func FindMatchingTemplates(ctx context.Context,
 	}
 	targetHost := parsedURL.Hostname()
 
-	htmlContent, err := headless.DoHeadlessRequest(ctx, targetURL, advanced.HeadlessTabs)
+	htmlContent, err := headless.DoHeadlessRequest(ctx, targetURL, advanced.HeadlessTabs, advanced.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch HTML for %s: %w", targetURL, err)
 	}
 
 	var matchedTemplates []*Template
-
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	total := len(templates)
+
 	var counter atomic.Int32
 
+	sem := make(chan struct{}, advanced.Threads)
+
 	for _, tmpl := range templates {
+		select {
+		case <-ctx.Done():
+			return matchedTemplates, ctx.Err()
+		default:
+		}
 		if !templateMatchesHost(tmpl, targetHost) {
 			current := int(counter.Add(1))
 			progressCallback(current, total)
 			continue
 		}
 
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(t *Template) {
 			defer wg.Done()
+			defer func() { <-sem }()
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 
 			matches, err := MatchTemplate(ctx, targetURL, htmlContent, t, advanced, logger)
 			if err == nil && matches {
@@ -155,6 +173,12 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 	host := parsedURL.Hostname()
 
 	for _, req := range tmpl.Requests {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+
 		var matched bool
 		var err error
 

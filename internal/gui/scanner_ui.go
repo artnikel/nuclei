@@ -223,7 +223,7 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	widget.StartBtn.SetEnabled(false)
 	widget.StopBtn.SetEnabled(true)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutFloat) * time.Second)
 	cancelScan = cancel
 
 	statsUpdateCh := make(chan string, 10)

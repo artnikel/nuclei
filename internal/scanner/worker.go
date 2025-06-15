@@ -32,7 +32,7 @@ func StartWorkers(ctx context.Context, targetsCh <-chan string, workers int, pro
 					}
 					err := processFn(ctx, target)
 					if err != nil {
-						//logger.Info.Printf("Error processing target %s: %v\n", target, err)
+						logger.Info.Printf("Error processing target %s: %v\n", target, err)
 					}
 				}
 			}

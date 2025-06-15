@@ -304,7 +304,7 @@ func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmp
 		url = baseURL
 	}
 
-	htmlContent, err := headless.DoHeadlessRequest(ctx, url, advanced.HeadlessTabs)
+	htmlContent, err := headless.DoHeadlessRequest(ctx, url, advanced.HeadlessTabs, advanced.Timeout)
 	if err != nil {
 		logger.Error.Printf("Headless request failed: %v", err)
 		return false, err
@@ -332,7 +332,7 @@ func matchOfflineHTML(html string, req *Request, tmpl *Template, logger *logging
 			for _, word := range matcher.Words {
 				if strings.Contains(html, word) {
 					logger.Info.Printf(
-						"Template %s, offline matcher type=word matched word=%q", tmpl.ID, word)
+						"Template %s, offline matcher type=word matched word=%q matched=true", tmpl.ID, word)
 					return true
 				}
 			}
@@ -345,7 +345,7 @@ func matchOfflineHTML(html string, req *Request, tmpl *Template, logger *logging
 				}
 				if re.MatchString(html) {
 					logger.Info.Printf(
-						"Template %s, offline matcher type=regex matched pattern=%q", tmpl.ID, pattern)
+						"Template %s, offline matcher type=regex matched pattern=%q matched=true", tmpl.ID, pattern)
 					return true
 				}
 			}

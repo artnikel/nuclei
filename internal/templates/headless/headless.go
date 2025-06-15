@@ -4,10 +4,9 @@ package headless
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
+	"time"
 
-	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/chromedp/chromedp"
 )
 
@@ -22,26 +21,21 @@ var (
 func InitHeadless() error {
 	once.Do(func() {
 		opts := append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", true),
 			chromedp.Flag("ignore-certificate-errors", true),
-			chromedp.Headless,
-			chromedp.DisableGPU,
+			chromedp.Flag("disable-gpu", true),
 		)
 
 		var cancel context.CancelFunc
 		allocCtx, cancel = chromedp.NewExecAllocator(context.Background(), opts...)
 
-		browserCtx, _ = chromedp.NewContext(allocCtx,
-			chromedp.WithLogf(func(format string, args ...interface{}) {
-				msg := fmt.Sprintf(format, args...)
-				if strings.Contains(msg, "could not unmarshal event") {
-					return
-				}
-			}),
-		)
+		browserCtx, _ = chromedp.NewContext(allocCtx)
 
 		initErr = chromedp.Run(browserCtx)
+
 		if initErr != nil {
 			cancel()
+			browserCtx = nil
 		}
 	})
 
@@ -49,10 +43,15 @@ func InitHeadless() error {
 }
 
 // DoHeadlessRequest opens a new tab, navigates to fullURL, waits for body, and returns the page HTML
-func DoHeadlessRequest(ctx context.Context, fullURL string, tabs int) (string, error) {
+func DoHeadlessRequest(ctx context.Context, fullURL string, tabs int, timeout time.Duration) (string, error) {
 	if err := InitHeadless(); err != nil {
 		return "", fmt.Errorf("failed to init headless: %w", err)
 	}
+
+	if browserCtx == nil {
+		return "", fmt.Errorf("internal error: headless browser context is nil")
+	}
+
 	headlessSem := make(chan struct{}, tabs) // semaphore limiting concurrent headless tabs
 	headlessSem <- struct{}{}
 	defer func() { <-headlessSem }()
@@ -60,7 +59,7 @@ func DoHeadlessRequest(ctx context.Context, fullURL string, tabs int) (string, e
 	tabCtx, cancel := chromedp.NewContext(browserCtx)
 	defer cancel()
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, constants.OneMinTimeout)
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, timeout)
 	defer timeoutCancel()
 
 	var htmlContent string
@@ -70,9 +69,9 @@ func DoHeadlessRequest(ctx context.Context, fullURL string, tabs int) (string, e
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.OuterHTML("html", &htmlContent, chromedp.ByQuery),
 	)
+
 	if err != nil {
 		return "", fmt.Errorf("chromedp run failed: %w", err)
 	}
-
 	return htmlContent, nil
 }

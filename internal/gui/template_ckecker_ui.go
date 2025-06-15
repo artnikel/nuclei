@@ -350,10 +350,10 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 				widget.ResultsOutput.SetText(strings.Join(lines, "\n"))
 				widget.CreateTemplateBtn.SetEnabled(true)
 			} else {
-				lines = append(lines, "\nTotal matching: "+strconv.Itoa(len(matched)))
-				lines = append(lines, "\nMatching templates:")
+				lines = append(lines, "\n Total matching: "+strconv.Itoa(len(matched)))
+				lines = append(lines, "\n Matching templates:")
 				for _, tmpl := range matched {
-					lines = append(lines, " "+tmpl.ID)
+					lines = append(lines, " / "+tmpl.ID)
 				}
 				result := strings.Join(lines, "\n")
 				widget.ResultsOutput.SetText(result)

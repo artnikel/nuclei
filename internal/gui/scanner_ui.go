@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +40,7 @@ var (
 	templatesDir  string
 	isRunning     = &atomic.Bool{}
 	cancelScan    context.CancelFunc
+	goodResultsMu sync.Mutex
 )
 
 // BuildScannerSection builds the scanner UI section and returns the page and widget structure
@@ -215,7 +217,6 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	if err != nil {
 		logger.Error.Printf("failed to load template: %v", err)
 		walk.MsgBox(parent, "Error", fmt.Sprintf("Failed to load template: %v", err), walk.MsgBoxIconError)
-		return
 	}
 
 	isRunning.Store(true)
@@ -281,6 +282,7 @@ func runScan(
 		}
 
 		if matched {
+			templates.SaveGood(target, template.ID, goodResultsMu)
 			atomic.AddInt64(&success, 1)
 			return nil
 		}

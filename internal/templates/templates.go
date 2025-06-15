@@ -42,7 +42,11 @@ func LoadTemplate(path string) (*Template, error) {
 
 	tmpl := &Template{}
 	if err := yaml.Unmarshal(bs, tmpl); err != nil {
-		return nil, fmt.Errorf("failed to parse template %s: %w", path, err)
+		isProfile, _ := isProfileFile(bs)
+		if isProfile {
+			return nil, fmt.Errorf("skipping profile file: %s", path)
+		}
+		return nil, fmt.Errorf("failed to parse file %s: %w", path, err)
 	}
 	tmpl.NormalizeRequests()
 
@@ -53,7 +57,7 @@ func LoadTemplate(path string) (*Template, error) {
 }
 
 // LoadTemplates loads and parses YAML templates from the specified directory
-func LoadTemplates(dir string) ([]*Template, error) {
+func LoadTemplates(dir string, logger *logging.Logger) ([]*Template, error) {
 	var templates []*Template
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -71,7 +75,12 @@ func LoadTemplates(dir string) ([]*Template, error) {
 		}
 		tmpl := &Template{}
 		if err := yaml.Unmarshal(bs, tmpl); err != nil {
-			return fmt.Errorf("failed to parse template %s: %w", path, err)
+			isProfile, _ := isProfileFile(bs)
+			if isProfile {
+				logger.Info.Printf("skipping profile file: %s", path)
+			} else {
+				logger.Info.Printf("failed to parse file %s: %v", path, err)
+			}
 		}
 		tmpl.NormalizeRequests()
 		tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
@@ -95,7 +104,7 @@ func FindMatchingTemplates(ctx context.Context,
 	logger *logging.Logger,
 	progressCallback func(i, total int)) ([]*Template, error) {
 
-	templates, err := LoadTemplates(templatesDir)
+	templates, err := LoadTemplates(templatesDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +216,7 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 				}
 			}
 
-		case "dns", "CNAME", "NS", "TXT", "A":
+		case "dns", "CNAME", "NS", "TXT", "A", "CAA", "DS", "AAAA", "MX", "PTR", "SOA":
 			matched, err = matchDNSRequest(host, req, tmpl, logger)
 		case "network":
 			matched, err = matchNetworkRequest(ctx, host, req, tmpl, logger)

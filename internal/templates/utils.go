@@ -7,10 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
+	"gopkg.in/yaml.v3"
 )
 
 // newInsecureHTTTPClient returns HTTP client with TLS-certificate checking disabled
@@ -120,4 +123,32 @@ func canOfflineMatchRequest(req *Request) bool {
 		}
 	}
 	return true
+}
+
+func isProfileFile(data []byte) (bool, error) {
+	var prof struct {
+		Severity  []string `yaml:"severity"`
+		Type      []string `yaml:"type"`
+		ExcludeID []string `yaml:"exclude-id"`
+	}
+
+	if err := yaml.Unmarshal(data, &prof); err != nil {
+		return false, err
+	}
+
+	return len(prof.Severity) > 0 || len(prof.Type) > 0 || len(prof.ExcludeID) > 0, nil
+}
+
+func SaveGood(target, templateID string, mu sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	f, err := os.OpenFile("goods.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("error writing to goods.txt: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	_, _ = fmt.Fprintf(f, "%s -> %s\n", target, templateID)
 }

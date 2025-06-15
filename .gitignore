@@ -5,3 +5,4 @@ logs/
 rsrc.syso
 app.manifest
 *.exe
+*.txt

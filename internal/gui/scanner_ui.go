@@ -26,7 +26,7 @@ type ScannerPageWidget struct {
 	TemplatesLabel     *walk.Label
 	SelectTargetsBtn   *walk.PushButton
 	SelectTemplatesBtn *walk.PushButton
-	ThreadsEntry       *walk.NumberEdit
+	ThreadsEntry       *walk.LineEdit
 	TimeoutEntry       *walk.LineEdit
 	StatsLabel         *walk.Label
 	StartBtn           *walk.PushButton
@@ -44,6 +44,7 @@ var (
 // BuildScannerSection builds the scanner UI section and returns the page and widget structure
 func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 	maxThreads := runtime.NumCPU()
+	maxThreadsStr := strconv.Itoa(maxThreads)
 
 	page := TabPage{
 		Title:  "Scanner",
@@ -81,16 +82,14 @@ func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 				Layout: Grid{Columns: 2},
 				Children: []Widget{
 					Label{Text: "Number of threads:"},
-					NumberEdit{
+					LineEdit{
 						AssignTo: &scannerWidget.ThreadsEntry,
-						Value:    float64(maxThreads),
-						MinValue: 1,
-						MaxValue: 1000,
+						Text:     maxThreadsStr,
 					},
 					Label{Text: "Timeout (seconds):"},
 					LineEdit{
 						AssignTo: &scannerWidget.TimeoutEntry,
-						Text:     "1",
+						Text:     "10",
 					},
 				},
 			},
@@ -191,7 +190,7 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 		return
 	}
 
-	threads := int(widget.ThreadsEntry.Value())
+	threads, _ := strconv.Atoi(widget.ThreadsEntry.Text())
 	if threads <= 0 {
 		walk.MsgBox(parent, "Error", "Invalid thread count", walk.MsgBoxIconError)
 		return
@@ -223,7 +222,7 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	widget.StartBtn.SetEnabled(false)
 	widget.StopBtn.SetEnabled(true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutFloat) * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutFloat)*time.Second)
 	cancelScan = cancel
 
 	statsUpdateCh := make(chan string, 10)

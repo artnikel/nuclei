@@ -184,7 +184,15 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 
 		switch req.Type {
 		case "http", "":
-			if canOfflineMatchRequest(req) {
+			if htmlContent == "" {
+				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
+				if err != nil {
+					return false, err
+				}
+				if matched {
+					return true, nil
+				}
+			} else if canOfflineMatchRequest(req) {
 				matched := matchOfflineHTML(htmlContent, req, tmpl, logger)
 				if matched {
 					return true, nil
@@ -198,6 +206,7 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 					return true, nil
 				}
 			}
+
 		case "dns", "CNAME", "NS", "TXT", "A":
 			matched, err = matchDNSRequest(host, req, tmpl, logger)
 		case "network":

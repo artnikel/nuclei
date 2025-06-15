@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -13,121 +12,171 @@ import (
 	"sync/atomic"
 	"time"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/data/binding"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/storage"
-	"fyne.io/fyne/v2/widget"
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
 
-	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/scanner"
 	"github.com/artnikel/nuclei/internal/templates"
 )
 
-// BuildScannerSection builds the scanner UI section and returns it along with the start flag and cancel function
-func BuildScannerSection(a fyne.App, w fyne.Window, logger *logging.Logger) (fyne.CanvasObject, *atomic.Bool, *context.CancelFunc) {
-	var targetsFile string
-	var templatesDir string
+// ScannerPageWidget holds all the widgets for the scanner section
+type ScannerPageWidget struct {
+	TargetsLabel       *walk.Label
+	TemplatesLabel     *walk.Label
+	SelectTargetsBtn   *walk.PushButton
+	SelectTemplatesBtn *walk.PushButton
+	ThreadsEntry       *walk.NumberEdit
+	TimeoutEntry       *walk.LineEdit
+	StatsLabel         *walk.Label
+	StartBtn           *walk.PushButton
+	StopBtn            *walk.PushButton
+}
 
-	isRunning := &atomic.Bool{}
-	var cancelScan context.CancelFunc
+var (
+	scannerWidget ScannerPageWidget
+	targetsFile   string
+	templatesDir  string
+	isRunning     = &atomic.Bool{}
+	cancelScan    context.CancelFunc
+)
 
-	targetsLabel := widget.NewLabel("Targets: (not selected)")
-	templatesLabel := widget.NewLabel("Templates: (not selected)")
-
-	selectTargetsBtn := newSelectTargetsButton(w, &targetsFile, targetsLabel)
-	selectTemplatesBtn := newSelectTemplateButton(w, &templatesDir, templatesLabel)
-
+// BuildScannerSection builds the scanner UI section and returns the page and widget structure
+func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 	maxThreads := runtime.NumCPU()
-	threadsEntry := newThreadsEntry(maxThreads)
-	timeoutEntry := newTimeoutEntry()
 
-	statsBinding := binding.NewString()
-	_ = statsBinding.Set(initialStatsText())
-	statsLabel := widget.NewLabelWithData(statsBinding)
+	page := TabPage{
+		Title:  "Scanner",
+		Layout: VBox{},
+		Children: []Widget{
+			Label{
+				Text: "Scan Targets Section",
+				Font: Font{Bold: true, PointSize: 12},
+			},
+			VSpacer{Size: 10},
 
-	startBtn := widget.NewButton("Start", nil)
-	stopBtn := widget.NewButton("Stop", nil)
-	stopBtn.Disable()
+			PushButton{
+				AssignTo: &scannerWidget.SelectTargetsBtn,
+				Text:     "Select targets (.txt)",
+				MinSize:  Size{200, 30},
+			},
+			Label{
+				AssignTo: &scannerWidget.TargetsLabel,
+				Text:     "Targets: (not selected)",
+			},
+			VSpacer{Size: 10},
 
-	startBtn.OnTapped = func() {
-		handleStartButtonClick(a, w, targetsFile, templatesDir, threadsEntry, timeoutEntry, statsBinding, isRunning, startBtn, stopBtn, &cancelScan, logger)
+			PushButton{
+				AssignTo: &scannerWidget.SelectTemplatesBtn,
+				Text:     "Select template (.yaml/.yml)",
+				MinSize:  Size{200, 30},
+			},
+			Label{
+				AssignTo: &scannerWidget.TemplatesLabel,
+				Text:     "Templates: (not selected)",
+			},
+			VSpacer{Size: 10},
+
+			Composite{
+				Layout: Grid{Columns: 2},
+				Children: []Widget{
+					Label{Text: "Number of threads:"},
+					NumberEdit{
+						AssignTo: &scannerWidget.ThreadsEntry,
+						Value:    float64(maxThreads),
+						MinValue: 1,
+						MaxValue: 1000,
+					},
+					Label{Text: "Timeout (seconds):"},
+					LineEdit{
+						AssignTo: &scannerWidget.TimeoutEntry,
+						Text:     "1",
+					},
+				},
+			},
+			VSpacer{Size: 10},
+
+			Composite{
+				Layout: HBox{},
+				Children: []Widget{
+					PushButton{
+						AssignTo: &scannerWidget.StartBtn,
+						Text:     "Start",
+						MinSize:  Size{80, 30},
+					},
+					PushButton{
+						AssignTo: &scannerWidget.StopBtn,
+						Text:     "Stop",
+						MinSize:  Size{80, 30},
+						Enabled:  false,
+					},
+				},
+			},
+			VSpacer{Size: 10},
+
+			Label{
+				AssignTo: &scannerWidget.StatsLabel,
+				Text:     initialStatsText(),
+			},
+		},
 	}
 
-	stopBtn.OnTapped = func() {
+	return page, &scannerWidget
+}
+
+// InitializeScannerSection initializes the scanner section widgets with their event handlers
+func InitializeScannerSection(widget *ScannerPageWidget, parent walk.Form, logger *logging.Logger) {
+	widget.SelectTargetsBtn.Clicked().Attach(func() {
+		selectTargetsFile(parent, widget)
+	})
+
+	widget.SelectTemplatesBtn.Clicked().Attach(func() {
+		selectTemplatesFile(parent, widget)
+	})
+
+	widget.StartBtn.Clicked().Attach(func() {
+		handleStartButtonClick(parent, widget, logger)
+	})
+
+	widget.StopBtn.Clicked().Attach(func() {
 		if cancelScan != nil {
 			cancelScan()
 		}
-	}
-
-	section := container.NewVBox(
-		widget.NewLabel("Scan Targets Section"),
-		selectTargetsBtn, targetsLabel,
-		selectTemplatesBtn, templatesLabel,
-		widget.NewForm(
-			widget.NewFormItem("Number of threads", threadsEntry),
-			widget.NewFormItem("Timeout (seconds)", timeoutEntry),
-		),
-		container.NewHBox(startBtn, stopBtn),
-		statsLabel,
-	)
-
-	return section, isRunning, &cancelScan
-}
-
-// newSelectTargetsButton creates a button to select a file with scan targets
-func newSelectTargetsButton(w fyne.Window, targetsFile *string, label *widget.Label) *widget.Button {
-	return widget.NewButton("Select targets (.txt)", func() {
-		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			*targetsFile = reader.URI().Path()
-			label.SetText("Targets: " + *targetsFile)
-		}, w)
-		fd.Resize(fyne.NewSize(800, 600))
-		fd.SetFilter(storage.NewExtensionFileFilter([]string{constants.TxtFileFormat}))
-		fd.Show()
 	})
 }
 
-// newSelectTemplateButton creates a button to select a template directory
-func newSelectTemplateButton(w fyne.Window, templatesFile *string, label *widget.Label) *widget.Button {
-	return widget.NewButton("Select template (.yaml/.yml)", func() {
-		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			*templatesFile = reader.URI().Path()
-			label.SetText("Template: " + *templatesFile)
-		}, w)
-		fd.Resize(fyne.NewSize(800, 600))
-		fd.SetFilter(storage.NewExtensionFileFilter([]string{constants.YamlFileFormat, constants.YmlFileFormat}))
-		fd.Show()
-	})
-}
+// selectTargetsFile opens a file dialog to select targets file
+func selectTargetsFile(parent walk.Form, widget *ScannerPageWidget) {
+	dlg := new(walk.FileDialog)
+	dlg.Filter = "Text Files (*.txt)|*.txt"
+	dlg.Title = "Select targets file"
 
-// newThreadsSelect creates a field for entering the number of threads
-func newThreadsEntry(defaultThreads int) *widget.Entry {
-	entry := widget.NewEntry()
-	entry.SetText(strconv.Itoa(defaultThreads))
-	entry.Validator = func(s string) error {
-		_, err := strconv.Atoi(s)
-		if err != nil {
-			return fmt.Errorf("invalid number")
-		}
-		return nil
+	if ok, err := dlg.ShowOpen(parent); err != nil {
+		walk.MsgBox(parent, "Error", err.Error(), walk.MsgBoxIconError)
+		return
+	} else if !ok {
+		return
 	}
-	return entry
+
+	targetsFile = dlg.FilePath
+	widget.TargetsLabel.SetText("Targets: " + targetsFile)
 }
 
-// newTimeoutEntry creates a field for entering the timeout value in seconds
-func newTimeoutEntry() *widget.Entry {
-	e := widget.NewEntry()
-	e.SetText("1")
-	return e
+// selectTemplatesFile opens a file dialog to select template file
+func selectTemplatesFile(parent walk.Form, widget *ScannerPageWidget) {
+	dlg := new(walk.FileDialog)
+	dlg.Filter = "YAML Files (*.yaml;*.yml)|*.yaml;*.yml"
+	dlg.Title = "Select template file"
+
+	if ok, err := dlg.ShowOpen(parent); err != nil {
+		walk.MsgBox(parent, "Error", err.Error(), walk.MsgBoxIconError)
+		return
+	} else if !ok {
+		return
+	}
+
+	templatesDir = dlg.FilePath
+	widget.TemplatesLabel.SetText("Template: " + templatesDir)
 }
 
 // initialStatsText returns a string with initial statistics values
@@ -136,67 +185,60 @@ func initialStatsText() string {
 }
 
 // handleStartButtonClick handles a click on the scan start button
-func handleStartButtonClick(
-	a fyne.App,
-	w fyne.Window,
-	targetsFile, templateFile string,
-	threadsEntry *widget.Entry,
-	timeoutEntry *widget.Entry,
-	statsBinding binding.String,
-	isRunning *atomic.Bool,
-	startBtn, stopBtn *widget.Button,
-	cancelScan *context.CancelFunc,
-	logger *logging.Logger,
-) {
+func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger *logging.Logger) {
 	if isRunning.Load() {
-		dialog.ShowInformation("Scanner running", "Scanner is already running", w)
+		walk.MsgBox(parent, "Scanner running", "Scanner is already running", walk.MsgBoxIconInformation)
 		return
 	}
 
-	threads, err := strconv.Atoi(threadsEntry.Text)
-	if err != nil || threads <= 0 {
-		dialog.ShowError(fmt.Errorf("invalid thread count"), w)
+	threads := int(widget.ThreadsEntry.Value())
+	if threads <= 0 {
+		walk.MsgBox(parent, "Error", "Invalid thread count", walk.MsgBoxIconError)
 		return
 	}
 
-	timeoutFloat, err := strconv.ParseFloat(timeoutEntry.Text, 64)
+	timeoutFloat, err := strconv.ParseFloat(widget.TimeoutEntry.Text(), 64)
 	if err != nil || timeoutFloat < 0 {
-		dialog.ShowError(fmt.Errorf("invalid timeout"), w)
+		walk.MsgBox(parent, "Error", "Invalid timeout", walk.MsgBoxIconError)
 		return
 	}
 
 	if targetsFile == "" {
-		dialog.ShowError(fmt.Errorf("targets file not selected"), w)
+		walk.MsgBox(parent, "Error", "Targets file not selected", walk.MsgBoxIconError)
 		return
 	}
-	if templateFile == "" {
-		dialog.ShowError(fmt.Errorf("templates folder not selected"), w)
+	if templatesDir == "" {
+		walk.MsgBox(parent, "Error", "Templates file not selected", walk.MsgBoxIconError)
 		return
 	}
-	template, err := templates.LoadTemplate(templateFile)
+
+	template, err := templates.LoadTemplate(templatesDir)
 	if err != nil {
 		logger.Error.Printf("failed to load template: %v", err)
-		dialog.ShowError(fmt.Errorf("failed to load template: %w", err), w)
+		walk.MsgBox(parent, "Error", fmt.Sprintf("Failed to load template: %v", err), walk.MsgBoxIconError)
 		return
 	}
 
 	isRunning.Store(true)
-	startBtn.Disable()
-	stopBtn.Enable()
+	widget.StartBtn.SetEnabled(false)
+	widget.StopBtn.SetEnabled(true)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	*cancelScan = cancel
+	cancelScan = cancel
 
 	statsUpdateCh := make(chan string, 10)
-	go updateStatsBinding(statsBinding, statsUpdateCh)
+	go updateStatsLabel(widget, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, template, statsUpdateCh, a, isRunning, startBtn, stopBtn, logger)
+	go runScan(ctx, targetsFile, threads, template, statsUpdateCh, parent, widget, logger)
 }
 
-// updateStatsBinding listens to the update channel and updates the statistics string binding
-func updateStatsBinding(statsBinding binding.String, statsUpdateCh <-chan string) {
+// updateStatsLabel listens to the update channel and updates the statistics label
+func updateStatsLabel(widget *ScannerPageWidget, statsUpdateCh <-chan string) {
 	for update := range statsUpdateCh {
-		_ = statsBinding.Set(update)
+		// Use synchronous call to update UI from goroutine
+		widget.StatsLabel.Synchronize(func() {
+			widget.StatsLabel.SetText(update)
+		})
 	}
 }
 
@@ -207,18 +249,17 @@ func runScan(
 	threads int,
 	template *templates.Template,
 	statsUpdateCh chan<- string,
-	a fyne.App,
-	isRunning *atomic.Bool,
-	startBtn, stopBtn *widget.Button,
+	parent walk.Form,
+	widget *ScannerPageWidget,
 	logger *logging.Logger,
 ) {
 	defer func() {
 		close(statsUpdateCh)
-		a.Driver().DoFromGoroutine(func() {
+		widget.StartBtn.Synchronize(func() {
 			isRunning.Store(false)
-			startBtn.Enable()
-			stopBtn.Disable()
-		}, true)
+			widget.StartBtn.SetEnabled(true)
+			widget.StopBtn.SetEnabled(false)
+		})
 	}()
 
 	var totalTargets, processed, success, errors, totalDuration int64
@@ -228,7 +269,7 @@ func runScan(
 
 	processFn := func(ctx context.Context, target string) error {
 		startTime := time.Now()
-		matched, err := templates.MatchTemplate(ctx, target,"", template, &templates.AdvancedSettingsChecker{}, logger)
+		matched, err := templates.MatchTemplate(ctx, target, "", template, &templates.AdvancedSettingsChecker{}, logger)
 		durationMs := time.Since(startTime).Milliseconds()
 
 		atomic.AddInt64(&processed, 1)
@@ -266,7 +307,7 @@ func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- str
 
 	file, err := os.Open(targetsFile)
 	if err != nil {
-		log.Printf("Error opening targets file %s: %v\n", targetsFile, err)
+		fmt.Printf("Error opening targets file %s: %v\n", targetsFile, err)
 		return
 	}
 	defer file.Close()
@@ -298,4 +339,3 @@ func formatStats(totalTargets, processed, success, errors, totalDuration int64) 
 		totalTargets, processed, success, errors, avgMs,
 	)
 }
-

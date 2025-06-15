@@ -2,5 +2,6 @@ go.sum
 *.yaml
 logs/
 .vscode/
-fyne-cross/
-Icon.png
+rsrc.syso
+app.manifest
+*.exe

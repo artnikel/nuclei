@@ -1,25 +1,33 @@
-//go:generate make release
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 	"time"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
 
 	"github.com/artnikel/nuclei/internal/config"
 	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/gui"
+	"github.com/artnikel/nuclei/internal/license"
 	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/security"
-	"github.com/artnikel/nuclei/internal/license"
+
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
 )
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			errMsg := fmt.Sprintf("Panic caught: %v\n%s", r, debug.Stack())
+
+			fmt.Println(errMsg)
+
+			walk.MsgBox(nil, "Fatal error", errMsg, walk.MsgBoxIconError)
+		}
+	}()
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -55,25 +63,43 @@ func main() {
 			}
 		}
 	}()
-	a := app.NewWithID(cfg.App.ID)
-	a.Settings().SetTheme(theme.DarkTheme())
-	w := a.NewWindow("Nuclei 3.0 GUI Scanner")
 
-	scannerSection, _, _ := gui.BuildScannerSection(a, w, logger)
-	templateCheckerSection := gui.BuildTemplateCheckerSection(a, w, logger)
-	licenseSection := gui.BuildLicenseSection(a, w)
+	var mw *walk.MainWindow
+	var tabWidget *walk.TabWidget
 
-	tabs := container.NewAppTabs(
-		container.NewTabItem("Scanner", scannerSection),
-		container.NewTabItem("Template Checker", templateCheckerSection),
-		container.NewTabItem("License", licenseSection),
-	)
-	const (
-		width  = 800
-		heigth = 750
-	)
-	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(width, heigth))
-	w.CenterOnScreen()
-	w.ShowAndRun()
+	// Create scanner section
+	scannerPage, scannerPageWidget := gui.BuildScannerSection(logger)
+	
+	// Create template checker section
+	templateCheckerPage, templateCheckerPageWidget := gui.BuildTemplateCheckerSection(logger)
+
+	// Create license section
+	licensePage, licensePageWidget := gui.BuildLicenseSection()
+
+	if err := (MainWindow{
+		AssignTo: &mw,
+		Title:    "Nuclei 3.0 GUI Scanner",
+		MinSize:  Size{800, 750},
+		Size:     Size{800, 750},
+		Layout:   VBox{},
+		Children: []Widget{
+			TabWidget{
+				AssignTo: &tabWidget,
+				Pages: []TabPage{
+					scannerPage,
+					templateCheckerPage,
+					licensePage,
+				},
+			},
+		},
+	}.Create()); err != nil {
+		log.Fatal(err)
+	}
+
+	// Initialize the widgets after window creation
+	gui.InitializeScannerSection(scannerPageWidget, mw, logger)
+	gui.InitializeTemplateCheckerSection(templateCheckerPageWidget, mw, logger)
+	gui.InitializeLicenseSection(licensePageWidget, mw)
+
+	mw.Run()
 }

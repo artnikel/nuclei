@@ -48,7 +48,20 @@ type HeadlessResponse struct {
 var (
 	hostLimitersMu sync.Mutex                       // hostLimitersMu guards access to hostLimiters map
 	hostLimiters   = make(map[string]*rate.Limiter) // hostLimiters stores rate limiters per hostname
+
+	httpClientMu sync.Mutex
+	httpClient   *http.Client
 )
+
+func getHTTPClient() *http.Client {
+	httpClientMu.Lock()
+	defer httpClientMu.Unlock()
+
+	if httpClient == nil {
+		httpClient = newInsecureHTTPClient(constants.TenSecTimeout)
+	}
+	return httpClient
+}
 
 // getHostLimiter returns or creates a rate limiter for a given host
 func getHostLimiter(host string, advanced *AdvancedSettingsChecker) *rate.Limiter {
@@ -65,7 +78,7 @@ func getHostLimiter(host string, advanced *AdvancedSettingsChecker) *rate.Limite
 
 // matchHTTPRequest performs HTTP requests and matches responses
 func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
-	client := newInsecureHTTPClient(constants.TenSecTimeout)
+	client := getHTTPClient()
 
 	method := req.Method
 	if method == "" {
@@ -95,6 +108,8 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			return false, err
 		}
 
+		httpReq.Header.Set("Connection", "close")
+
 		for k, v := range req.Headers {
 			httpReq.Header.Set(k, substituteVariables(v, vars))
 		}
@@ -119,7 +134,8 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		const maxBodySize = 10 * 1024 * 1024 // 10MB
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 		resp.Body.Close()
 		if err != nil {
 			logger.Info.Printf("Failed to read body for %s: %v", fullURL, err)
@@ -232,7 +248,9 @@ func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *T
 		}
 	}
 
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{
+		Timeout: constants.TenSecTimeout, 
+	}
 	conn, err := dialer.DialContext(ctx, protocol, host)
 	if err != nil {
 		return false, err

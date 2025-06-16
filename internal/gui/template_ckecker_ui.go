@@ -18,6 +18,7 @@ import (
 	"github.com/artnikel/nuclei/internal/constants"
 	"github.com/artnikel/nuclei/internal/logging"
 	"github.com/artnikel/nuclei/internal/templates"
+	"github.com/artnikel/nuclei/internal/templates/headless"
 )
 
 // TemplateCheckerPageWidget holds all the widgets for the template checker section
@@ -199,6 +200,7 @@ func InitializeTemplateCheckerSection(widget *TemplateCheckerPageWidget, parent 
 	widget.StopBtn.Clicked().Attach(func() {
 		if cancelCheck != nil {
 			cancelCheck()
+			headless.ForceReinitHeadless()
 		}
 	})
 }
@@ -282,8 +284,9 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 
 	ctx, cancel := context.WithTimeout(context.Background(), advanced.Timeout)
 	cancelCheck = cancel
+	headless.ForceReinitHeadless()
 
-		go func() {
+	go func() {
 		defer func() {
 			isChecking.Store(false)
 			widget.StopBtn.SetEnabled(false)

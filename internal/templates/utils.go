@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/artnikel/nuclei/internal/logging"
 	"golang.org/x/net/html"
 	"gopkg.in/yaml.v3"
 )
@@ -19,9 +20,12 @@ import (
 // newInsecureHTTTPClient returns HTTP client with TLS-certificate checking disabled
 func newInsecureHTTPClient(timeout time.Duration) *http.Client {
 	tr := &http.Transport{
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
-		DisableKeepAlives: true,
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConns:    100,
+		MaxConnsPerHost: 10,
+		IdleConnTimeout: 30 * time.Second,
 	}
+
 	return &http.Client{
 		Transport: tr,
 		Timeout:   timeout,
@@ -65,17 +69,22 @@ func substituteVariables(s string, vars map[string]interface{}) string {
 }
 
 // templateMatchesHost checks if the target host matches the list in the template
-func templateMatchesHost(tmpl *Template, targetHost string) bool {
-	if len(tmpl.Hosts) == 0 {
+func templateMatchesHost(tmpl *Template, targetHost string, logger *logging.Logger) bool {
+	// Если hosts полностью отсутствует или содержит только пустые строки — считаем, что шаблон универсальный
+	if len(tmpl.Hosts) == 0 || (len(tmpl.Hosts) == 1 && tmpl.Hosts[0] == "") {
 		return true
 	}
+
 	for _, h := range tmpl.Hosts {
 		if strings.Contains(targetHost, h) {
 			return true
 		}
 	}
+
+	logger.Info.Printf("Skipping template %s: host mismatch (target: %s, expected: %+v)", tmpl.ID, targetHost, tmpl.Hosts)
 	return false
 }
+
 
 // extractHTMLTitle extracts the contents of the <title> tag from the HTML document
 func extractHTMLTitle(r io.Reader) string {
@@ -139,9 +148,11 @@ func isProfileFile(data []byte) (bool, error) {
 	return len(prof.Severity) > 0 || len(prof.Type) > 0 || len(prof.ExcludeID) > 0, nil
 }
 
-func SaveGood(target, templateID string, mu sync.Mutex) {
-	mu.Lock()
-	defer mu.Unlock()
+var goodResultsMu sync.Mutex
+
+func SaveGood(target, templateID string) {
+	goodResultsMu.Lock()
+	defer goodResultsMu.Unlock()
 
 	f, err := os.OpenFile("goods.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

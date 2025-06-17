@@ -69,12 +69,15 @@ func main() {
 
 	// Create scanner section
 	scannerPage, scannerPageWidget := gui.BuildScannerSection(logger)
-	
+
 	// Create template checker section
 	templateCheckerPage, templateCheckerPageWidget := gui.BuildTemplateCheckerSection(logger)
 
 	// Create license section
 	licensePage, licensePageWidget := gui.BuildLicenseSection()
+
+	// Create settings section
+	settingsPage, settingsPageWidget := gui.BuildSettingsSection()
 
 	if err := (MainWindow{
 		AssignTo: &mw,
@@ -89,6 +92,7 @@ func main() {
 					scannerPage,
 					templateCheckerPage,
 					licensePage,
+					settingsPage,
 				},
 			},
 		},
@@ -100,6 +104,7 @@ func main() {
 	gui.InitializeScannerSection(scannerPageWidget, mw, logger)
 	gui.InitializeTemplateCheckerSection(templateCheckerPageWidget, mw, logger)
 	gui.InitializeLicenseSection(licensePageWidget, mw)
+	gui.InitializeSettingsSection(settingsPageWidget, mw)
 
 	mw.Run()
 }

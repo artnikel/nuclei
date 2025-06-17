@@ -22,7 +22,7 @@ func NewLogger(dir string) (*Logger, error) {
 		return nil, err
 	}
 
-	logPath := filepath.Join(dir, "app.log")
+	logPath := filepath.Join(dir, "nuclei.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, constants.FilePerm)
 	if err != nil {
 		return nil, err

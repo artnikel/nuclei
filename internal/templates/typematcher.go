@@ -53,12 +53,12 @@ var (
 	httpClient   *http.Client
 )
 
-func getHTTPClient() *http.Client {
+func getHTTPClient(timeout time.Duration) *http.Client {
 	httpClientMu.Lock()
 	defer httpClientMu.Unlock()
 
 	if httpClient == nil {
-		httpClient = newInsecureHTTPClient(constants.TenSecTimeout)
+		httpClient = newInsecureHTTPClient(timeout)
 	}
 	return httpClient
 }
@@ -78,7 +78,7 @@ func getHostLimiter(host string, advanced *AdvancedSettingsChecker) *rate.Limite
 
 // matchHTTPRequest performs HTTP requests and matches responses
 func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
-	client := getHTTPClient()
+	client := getHTTPClient(advanced.Timeout)
 
 	method := req.Method
 	if method == "" {
@@ -108,12 +108,10 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			return false, err
 		}
 
-		httpReq.Header.Set("Connection", "close")
-
 		for k, v := range req.Headers {
 			httpReq.Header.Set(k, substituteVariables(v, vars))
 		}
-
+		
 		limiter := getHostLimiter(parsedBaseURL.Hostname(), advanced)
 		for {
 			err := limiter.Wait(ctx)
@@ -128,9 +126,17 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			break
 		}
 
-		resp, err := client.Do(httpReq)
+		var httpLimiter = make(chan struct{}, advanced.Threads)
+
+		limitedDo := func(client *http.Client, req *http.Request) (*http.Response, error) {
+			httpLimiter <- struct{}{}
+			defer func() { <-httpLimiter }()
+			return client.Do(req)
+		}
+
+		resp, err := limitedDo(client, httpReq)
 		if err != nil {
-			logger.Info.Printf("HTTP request error for %s: %v", fullURL, err)
+			logger.Error.Printf("HTTP request error for template: %s request: %s err: %v", tmpl.ID, fullURL, err)
 			continue
 		}
 
@@ -249,7 +255,7 @@ func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *T
 	}
 
 	dialer := &net.Dialer{
-		Timeout: constants.TenSecTimeout, 
+		Timeout: constants.TenSecTimeout,
 	}
 	conn, err := dialer.DialContext(ctx, protocol, host)
 	if err != nil {

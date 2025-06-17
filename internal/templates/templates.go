@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,22 +70,11 @@ func LoadTemplates(dir string, logger *logging.Logger) ([]*Template, error) {
 		if !(strings.HasSuffix(d.Name(), constants.YamlFileFormat) || strings.HasSuffix(d.Name(), constants.YmlFileFormat)) {
 			return nil
 		}
-		bs, err := os.ReadFile(path)
+		tmpl, err := LoadTemplate(path)
 		if err != nil {
-			return err
+			logger.Info.Printf("skipping file %s: %v", path, err)
+			return nil
 		}
-		tmpl := &Template{}
-		if err := yaml.Unmarshal(bs, tmpl); err != nil {
-			isProfile, _ := isProfileFile(bs)
-			if isProfile {
-				logger.Info.Printf("skipping profile file: %s", path)
-			} else {
-				logger.Info.Printf("failed to parse file %s: %v", path, err)
-			}
-		}
-		tmpl.NormalizeRequests()
-		tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
-		tmpl.Requests = append(tmpl.Requests, tmpl.HTTPRaw...)
 
 		templates = append(templates, tmpl)
 		return nil
@@ -136,7 +126,7 @@ func FindMatchingTemplates(ctx context.Context,
 			return matchedTemplates, ctx.Err()
 		default:
 		}
-		if !templateMatchesHost(tmpl, targetHost) {
+		if !templateMatchesHost(tmpl, targetHost, logger) {
 			current := int(counter.Add(1))
 			progressCallback(current, total)
 			continue
@@ -166,6 +156,8 @@ func FindMatchingTemplates(ctx context.Context,
 	}
 
 	wg.Wait()
+	templates = nil
+	runtime.GC()
 	return matchedTemplates, nil
 }
 
@@ -193,27 +185,20 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 
 		switch req.Type {
 		case "http", "":
-			if htmlContent == "" {
-				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
-				if err != nil {
-					return false, err
-				}
-				if matched {
+			canOffline := canOfflineMatchRequest(req)
+
+			if canOffline && htmlContent != "" {
+				if matchOfflineHTML(htmlContent, req, tmpl, logger) {
 					return true, nil
 				}
-			} else if canOfflineMatchRequest(req) {
-				matched := matchOfflineHTML(htmlContent, req, tmpl, logger)
-				if matched {
-					return true, nil
-				}
-			} else {
-				matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
-				if err != nil {
-					return false, err
-				}
-				if matched {
-					return true, nil
-				}
+			}
+
+			matched, err := matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
+			if err != nil {
+				return false, err
+			}
+			if matched {
+				return true, nil
 			}
 
 		case "dns", "CNAME", "NS", "TXT", "A", "CAA", "DS", "AAAA", "MX", "PTR", "SOA":

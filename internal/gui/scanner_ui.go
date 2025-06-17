@@ -6,10 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
-	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,8 +24,6 @@ type ScannerPageWidget struct {
 	TemplatesLabel     *walk.Label
 	SelectTargetsBtn   *walk.PushButton
 	SelectTemplatesBtn *walk.PushButton
-	ThreadsEntry       *walk.LineEdit
-	TimeoutEntry       *walk.LineEdit
 	StatsLabel         *walk.Label
 	StartBtn           *walk.PushButton
 	StopBtn            *walk.PushButton
@@ -40,13 +35,10 @@ var (
 	templatesDir  string
 	isRunning     = &atomic.Bool{}
 	cancelScan    context.CancelFunc
-	goodResultsMu sync.Mutex
 )
 
 // BuildScannerSection builds the scanner UI section and returns the page and widget structure
 func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
-	maxThreads := runtime.NumCPU()
-	maxThreadsStr := strconv.Itoa(maxThreads)
 
 	page := TabPage{
 		Title:  "Scanner",
@@ -77,23 +69,6 @@ func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 			Label{
 				AssignTo: &scannerWidget.TemplatesLabel,
 				Text:     "Templates: (not selected)",
-			},
-			VSpacer{Size: 10},
-
-			Composite{
-				Layout: Grid{Columns: 2},
-				Children: []Widget{
-					Label{Text: "Number of threads:"},
-					LineEdit{
-						AssignTo: &scannerWidget.ThreadsEntry,
-						Text:     maxThreadsStr,
-					},
-					Label{Text: "Timeout (seconds):"},
-					LineEdit{
-						AssignTo: &scannerWidget.TimeoutEntry,
-						Text:     "10",
-					},
-				},
 			},
 			VSpacer{Size: 10},
 
@@ -192,18 +167,6 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 		return
 	}
 
-	threads, _ := strconv.Atoi(widget.ThreadsEntry.Text())
-	if threads <= 0 {
-		walk.MsgBox(parent, "Error", "Invalid thread count", walk.MsgBoxIconError)
-		return
-	}
-
-	timeoutFloat, err := strconv.ParseFloat(widget.TimeoutEntry.Text(), 64)
-	if err != nil || timeoutFloat < 0 {
-		walk.MsgBox(parent, "Error", "Invalid timeout", walk.MsgBoxIconError)
-		return
-	}
-
 	if targetsFile == "" {
 		walk.MsgBox(parent, "Error", "Targets file not selected", walk.MsgBoxIconError)
 		return
@@ -223,13 +186,13 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	widget.StartBtn.SetEnabled(false)
 	widget.StopBtn.SetEnabled(true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutFloat)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), advanced.Timeout)
 	cancelScan = cancel
 
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsLabel(widget, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, threads, template, statsUpdateCh, parent, widget, logger)
+	go runScan(ctx, targetsFile, advanced.Threads, template, statsUpdateCh, widget, logger)
 }
 
 // updateStatsLabel listens to the update channel and updates the statistics label
@@ -249,7 +212,6 @@ func runScan(
 	threads int,
 	template *templates.Template,
 	statsUpdateCh chan<- string,
-	parent walk.Form,
 	widget *ScannerPageWidget,
 	logger *logging.Logger,
 ) {
@@ -269,7 +231,7 @@ func runScan(
 
 	processFn := func(ctx context.Context, target string) error {
 		startTime := time.Now()
-		matched, err := templates.MatchTemplate(ctx, target, "", template, &templates.AdvancedSettingsChecker{}, logger)
+		matched, err := templates.MatchTemplate(ctx, target, "", template, advanced, logger)
 		durationMs := time.Since(startTime).Milliseconds()
 
 		atomic.AddInt64(&processed, 1)
@@ -282,7 +244,7 @@ func runScan(
 		}
 
 		if matched {
-			templates.SaveGood(target, template.ID, goodResultsMu)
+			templates.SaveGood(target, template.ID)
 			atomic.AddInt64(&success, 1)
 			return nil
 		}

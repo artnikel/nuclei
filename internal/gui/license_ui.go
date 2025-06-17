@@ -56,7 +56,7 @@ func BuildLicenseSection() (TabPage, *LicensePageWidget) {
 			PushButton{
 				AssignTo: &licenseWidget.CheckBtn,
 				Text:     "Check License",
-				MinSize:  Size{150, 30},
+				MinSize:  Size{Width: 150, Height: 30},
 			},
 			
 			VSpacer{},

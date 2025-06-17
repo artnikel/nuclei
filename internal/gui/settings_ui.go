@@ -10,23 +10,23 @@ import (
 )
 
 type SettingsPageWidget struct {
-	SemaphoreEntry    *walk.LineEdit
-	RateFreqEntry     *walk.LineEdit
-	RateBurstEntry    *walk.LineEdit
-	ThreadsEntry      *walk.LineEdit
-	TimeoutEntry      *walk.LineEdit
-	ApplyAdvancedBtn  *walk.PushButton
-	AdvancedGroup     *walk.GroupBox
+	SemaphoreEntry   *walk.LineEdit
+	RateFreqEntry    *walk.LineEdit
+	RateBurstEntry   *walk.LineEdit
+	ThreadsEntry     *walk.LineEdit
+	TimeoutEntry     *walk.LineEdit
+	ApplyAdvancedBtn *walk.PushButton
+	AdvancedGroup    *walk.GroupBox
 }
 
 var (
 	settingsPageWidget SettingsPageWidget
-	advanced = &templates.AdvancedSettingsChecker{
+	advanced           = &templates.AdvancedSettingsChecker{
+		Workers:              300,
+		Timeout:              500 * time.Second,
 		HeadlessTabs:         10,
 		RateLimiterFrequency: 10,
 		RateLimiterBurstSize: 100,
-		Threads:              300,
-		Timeout:              500 * time.Second,
 	}
 )
 
@@ -35,6 +35,27 @@ func BuildSettingsSection() (TabPage, *SettingsPageWidget) {
 		Title:  "Settings",
 		Layout: VBox{},
 		Children: []Widget{
+			Label{
+				Text: "Settings Section",
+				Font: Font{Bold: true, PointSize: 12},
+			},
+			VSpacer{Size: 20},
+
+			GroupBox{
+				Layout: VBox{},
+				Children: []Widget{
+					Label{Text: "Max goroutines:"},
+					LineEdit{
+						AssignTo: &settingsPageWidget.ThreadsEntry,
+						Text:     "300",
+					},
+					Label{Text: "Timeout (seconds):"},
+					LineEdit{
+						AssignTo: &settingsPageWidget.TimeoutEntry,
+						Text:     "500",
+					},
+				},
+			},
 
 			GroupBox{
 				AssignTo: &settingsPageWidget.AdvancedGroup,
@@ -45,17 +66,6 @@ func BuildSettingsSection() (TabPage, *SettingsPageWidget) {
 					Composite{
 						Layout: Grid{Columns: 2},
 						Children: []Widget{
-							Label{Text: "Max goroutines:"},
-							LineEdit{
-								AssignTo: &settingsPageWidget.ThreadsEntry,
-								Text:     "300",
-							},
-							Label{Text: "Timeout (seconds):"},
-							LineEdit{
-								AssignTo: &settingsPageWidget.TimeoutEntry,
-								Text:     "500",
-							},
-
 							Label{Text: "Semaphore limit (tabs):"},
 							LineEdit{
 								AssignTo: &settingsPageWidget.SemaphoreEntry,
@@ -70,16 +80,17 @@ func BuildSettingsSection() (TabPage, *SettingsPageWidget) {
 							LineEdit{
 								AssignTo: &settingsPageWidget.RateBurstEntry,
 								Text:     "100",
-							},	
+							},
 						},
 					},
-					VSpacer{Size: 10},
-					PushButton{
-						AssignTo: &settingsPageWidget.ApplyAdvancedBtn,
-						Text:     "Apply settings",
-						MinSize:  Size{120, 30},
-					},
 				},
+			},
+
+			VSpacer{Size: 10},
+			PushButton{
+				AssignTo: &settingsPageWidget.ApplyAdvancedBtn,
+				Text:     "Apply settings",
+				MinSize:  Size{Width: 120, Height: 30},
 			},
 		},
 	}
@@ -87,9 +98,9 @@ func BuildSettingsSection() (TabPage, *SettingsPageWidget) {
 	return page, &settingsPageWidget
 }
 
+
 // InitializeLicenseSection initializes the license section widgets with their event handlers
 func InitializeSettingsSection(widget *SettingsPageWidget, parent walk.Form) {
-
 	widget.ApplyAdvancedBtn.Clicked().Attach(func() {
 		applyAdvancedSettings(parent, widget)
 	})
@@ -97,22 +108,22 @@ func InitializeSettingsSection(widget *SettingsPageWidget, parent walk.Form) {
 
 // applyAdvancedSettings applies the advanced settings from the form
 func applyAdvancedSettings(parent walk.Form, widget *SettingsPageWidget) {
-	headlessTabs, err1 := strconv.Atoi(widget.SemaphoreEntry.Text())
-	rateFreq, err2 := strconv.Atoi(widget.RateFreqEntry.Text())
-	burstSize, err3 := strconv.Atoi(widget.RateBurstEntry.Text())
-	threads, err4 := strconv.Atoi(widget.ThreadsEntry.Text())
-	timeout, err5 := strconv.Atoi(widget.TimeoutEntry.Text())
+	workers, err1 := strconv.Atoi(widget.ThreadsEntry.Text())
+	timeout, err2 := strconv.Atoi(widget.TimeoutEntry.Text())
+	headlessTabs, err3 := strconv.Atoi(widget.SemaphoreEntry.Text())
+	rateFreq, err4 := strconv.Atoi(widget.RateFreqEntry.Text())
+	burstSize, err5 := strconv.Atoi(widget.RateBurstEntry.Text())
 
 	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 		walk.MsgBox(parent, "Error", "Incorrect values", walk.MsgBoxIconError)
 		return
 	}
 
+	advanced.Workers = workers
+	advanced.Timeout = time.Duration(timeout) * time.Second
 	advanced.HeadlessTabs = headlessTabs
 	advanced.RateLimiterFrequency = rateFreq
 	advanced.RateLimiterBurstSize = burstSize
-	advanced.Threads = threads
-	advanced.Timeout = time.Duration(timeout) * time.Second
 
 	walk.MsgBox(parent, "Success", "Settings changed", walk.MsgBoxIconInformation)
 }

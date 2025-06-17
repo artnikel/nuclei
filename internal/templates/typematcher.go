@@ -126,7 +126,7 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			break
 		}
 
-		var httpLimiter = make(chan struct{}, advanced.Threads)
+		var httpLimiter = make(chan struct{}, advanced.Workers)
 
 		limitedDo := func(client *http.Client, req *http.Request) (*http.Response, error) {
 			httpLimiter <- struct{}{}

@@ -78,12 +78,12 @@ func main() {
 
 	// Create settings section
 	settingsPage, settingsPageWidget := gui.BuildSettingsSection()
-
+	
 	if err := (MainWindow{
 		AssignTo: &mw,
 		Title:    "Nuclei 3.0 GUI Scanner",
-		MinSize:  Size{800, 750},
-		Size:     Size{800, 750},
+		MinSize:  Size{Width: 800, Height: 750},
+		Size:     Size{Width: 800, Height: 750},
 		Layout:   VBox{},
 		Children: []Widget{
 			TabWidget{

@@ -35,7 +35,6 @@ type TemplateCheckerPageWidget struct {
 var (
 	templateCheckerWidget TemplateCheckerPageWidget
 	checkTemplatesDir     string
-	advancedVisible       bool
 	isChecking            = &atomic.Bool{}
 	cancelCheck           context.CancelFunc
 )
@@ -62,7 +61,7 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 			PushButton{
 				AssignTo: &templateCheckerWidget.SelectTemplateDirBtn,
 				Text:     "Select templates folder for checking",
-				MinSize:  Size{250, 30},
+				MinSize:  Size{Width: 250, Height: 30},
 			},
 			Label{
 				AssignTo: &templateCheckerWidget.TemplateCheckLabel,
@@ -76,12 +75,12 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 					PushButton{
 						AssignTo: &templateCheckerWidget.CheckTemplatesBtn,
 						Text:     "Check templates",
-						MinSize:  Size{150, 30},
+						MinSize:  Size{Width: 150, Height: 30},
 					},
 					PushButton{
 						AssignTo: &templateCheckerWidget.StopBtn,
 						Text:     "Stop",
-						MinSize:  Size{80, 30},
+						MinSize:  Size{Width: 80, Height: 30},
 						Enabled:  false,
 					},
 				},
@@ -90,7 +89,7 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 
 			TextEdit{
 				AssignTo: &templateCheckerWidget.ResultsOutput,
-				MinSize:  Size{0, 200},
+				MinSize:  Size{Width: 0, Height: 200},
 				VScroll:  true,
 				ReadOnly: true,
 				HScroll:  false,
@@ -100,7 +99,7 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 			PushButton{
 				AssignTo: &templateCheckerWidget.CreateTemplateBtn,
 				Text:     "Create new template",
-				MinSize:  Size{150, 30},
+				MinSize:  Size{Width: 150, Height: 30},
 				Enabled:  false,
 			},
 			VSpacer{Size: 10},		

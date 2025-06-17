@@ -23,11 +23,11 @@ import (
 )
 
 type AdvancedSettingsChecker struct {
+	Workers              int
+	Timeout              time.Duration
 	HeadlessTabs         int
 	RateLimiterFrequency int
 	RateLimiterBurstSize int
-	Threads              int
-	Timeout              time.Duration
 }
 
 // LoadTemplate loads and parses YAML template from the specified path
@@ -118,7 +118,7 @@ func FindMatchingTemplates(ctx context.Context,
 
 	var counter atomic.Int32
 
-	sem := make(chan struct{}, advanced.Threads)
+	sem := make(chan struct{}, advanced.Workers)
 
 	for _, tmpl := range templates {
 		select {

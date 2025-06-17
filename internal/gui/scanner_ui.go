@@ -39,7 +39,6 @@ var (
 
 // BuildScannerSection builds the scanner UI section and returns the page and widget structure
 func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
-
 	page := TabPage{
 		Title:  "Scanner",
 		Layout: VBox{},
@@ -53,7 +52,7 @@ func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 			PushButton{
 				AssignTo: &scannerWidget.SelectTargetsBtn,
 				Text:     "Select targets (.txt)",
-				MinSize:  Size{200, 30},
+				MinSize:  Size{Width: 200, Height: 30},
 			},
 			Label{
 				AssignTo: &scannerWidget.TargetsLabel,
@@ -64,7 +63,7 @@ func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 			PushButton{
 				AssignTo: &scannerWidget.SelectTemplatesBtn,
 				Text:     "Select template (.yaml/.yml)",
-				MinSize:  Size{200, 30},
+				MinSize:  Size{Width: 200, Height: 30},
 			},
 			Label{
 				AssignTo: &scannerWidget.TemplatesLabel,
@@ -78,12 +77,12 @@ func BuildScannerSection(logger *logging.Logger) (TabPage, *ScannerPageWidget) {
 					PushButton{
 						AssignTo: &scannerWidget.StartBtn,
 						Text:     "Start",
-						MinSize:  Size{80, 30},
+						MinSize:  Size{Width: 80, Height: 30},
 					},
 					PushButton{
 						AssignTo: &scannerWidget.StopBtn,
 						Text:     "Stop",
-						MinSize:  Size{80, 30},
+						MinSize:  Size{Width: 80, Height: 30},
 						Enabled:  false,
 					},
 				},
@@ -192,7 +191,7 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	statsUpdateCh := make(chan string, 10)
 	go updateStatsLabel(widget, statsUpdateCh)
 
-	go runScan(ctx, targetsFile, advanced.Threads, template, statsUpdateCh, widget, logger)
+	go runScan(ctx, targetsFile, advanced.Workers, template, statsUpdateCh, widget, logger)
 }
 
 // updateStatsLabel listens to the update channel and updates the statistics label

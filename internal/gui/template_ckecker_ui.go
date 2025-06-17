@@ -102,7 +102,7 @@ func BuildTemplateCheckerSection(logger *logging.Logger) (TabPage, *TemplateChec
 				MinSize:  Size{Width: 150, Height: 30},
 				Enabled:  false,
 			},
-			VSpacer{Size: 10},		
+			VSpacer{Size: 10},
 		},
 	}
 
@@ -161,13 +161,22 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 		return
 	}
 
-	url := strings.TrimSpace(widget.URLEntry.Text())
-	if url == "" {
+	rawInput := strings.TrimSpace(widget.URLEntry.Text())
+	if rawInput == "" {
 		widget.ResultsOutput.Synchronize(func() {
 			walk.MsgBox(parent, "Error", "Please enter a URL", walk.MsgBoxIconInformation)
 		})
 		return
 	}
+
+	normalizedURL, err := NormalizeTarget(rawInput)
+	if err != nil {
+		widget.ResultsOutput.Synchronize(func() {
+			walk.MsgBox(parent, "Error", fmt.Sprintf("Invalid URL: %v", err), walk.MsgBoxIconInformation)
+		})
+		return
+	}
+
 	isChecking.Store(true)
 	widget.StopBtn.SetEnabled(true)
 	widget.CheckTemplatesBtn.SetEnabled(false)
@@ -220,7 +229,7 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 			}
 		}()
 
-		matched, err := templates.FindMatchingTemplates(ctx, url, checkTemplatesDir, constants.FiveSecTimeout, advanced, logger, progressCallback)
+		matched, err := templates.FindMatchingTemplates(ctx, normalizedURL, checkTemplatesDir, constants.FiveSecTimeout, advanced, logger, progressCallback)
 		duration := time.Since(startTime)
 		close(done)
 

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -284,7 +285,12 @@ func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- str
 			if target == "" {
 				continue
 			}
-			targetsChan <- target
+			normalized, err := NormalizeTarget(target)
+			if err != nil {
+				fmt.Printf("Skipping invalid target %s: %v\n", target, err)
+				continue
+			}
+			targetsChan <- normalized
 			atomic.AddInt64(totalTargets, 1)
 		}
 	}
@@ -300,4 +306,17 @@ func formatStats(totalTargets, processed, success, errors, totalDuration int64) 
 		"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %d",
 		totalTargets, processed, success, errors, avgMs,
 	)
+}
+
+func NormalizeTarget(target string) (string, error) {
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return target, nil
+	}
+
+	normalized := "https://" + target
+	if _, err := url.Parse(normalized); err != nil {
+		return "", err
+	}
+
+	return normalized, nil
 }

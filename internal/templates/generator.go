@@ -7,13 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-
-	"github.com/artnikel/nuclei/internal/constants"
 )
 
 // GenerateTemplate creates a YAML template based on the HTTP response at the specified URL
-func GenerateTemplate(targetURL string) string {
-	client := newInsecureHTTPClient(constants.TenSecTimeout)
+func GenerateTemplate(targetURL string, advanced *AdvancedSettingsChecker) string {
+	client := newInsecureHTTPClient(advanced)
 	resp, err := client.Get(targetURL)
 	if err != nil {
 		return fmt.Sprintf("# Failed to request %s: %s\n", targetURL, err)

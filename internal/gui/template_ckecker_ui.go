@@ -275,7 +275,7 @@ func createTemplateAction(parent walk.Form, widget *TemplateCheckerPageWidget) {
 		return
 	}
 
-	tmpl := templates.GenerateTemplate(url)
+	tmpl := templates.GenerateTemplate(url, advanced)
 	if strings.HasPrefix(tmpl, "# Failed") {
 		walk.MsgBox(parent, "Error", fmt.Sprintf("Template generation failed:\n%s", tmpl), walk.MsgBoxIconError)
 		return

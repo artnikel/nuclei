@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,12 +31,23 @@ type ScannerPageWidget struct {
 	StopBtn            *walk.PushButton
 }
 
+// ScanStats holds comprehensive scanning statistics
+type ScanStats struct {
+	TotalTargets   int64
+	Processed      int64
+	Successes      int64
+	Errors         int64
+	TotalDuration  int64
+	StartTime      time.Time
+}
+
 var (
 	scannerWidget ScannerPageWidget
 	targetsFile   string
 	templatesDir  string
 	isRunning     = &atomic.Bool{}
 	cancelScan    context.CancelFunc
+	scanStats     ScanStats
 )
 
 // BuildScannerSection builds the scanner UI section and returns the page and widget structure
@@ -157,7 +169,7 @@ func selectTemplatesFile(parent walk.Form, widget *ScannerPageWidget) {
 
 // initialStatsText returns a string with initial statistics values
 func initialStatsText() string {
-	return "Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\nAvg time (ms): 0"
+	return "Statistics:\nTargets loaded: 0\nProcessed: 0\nSuccesses: 0\nErrors: 0\n"
 }
 
 // handleStartButtonClick handles a click on the scan start button
@@ -195,10 +207,8 @@ func handleStartButtonClick(parent walk.Form, widget *ScannerPageWidget, logger 
 	go runScan(ctx, targetsFile, advanced.Workers, template, statsUpdateCh, widget, logger)
 }
 
-// updateStatsLabel listens to the update channel and updates the statistics label
 func updateStatsLabel(widget *ScannerPageWidget, statsUpdateCh <-chan string) {
 	for update := range statsUpdateCh {
-		// Use synchronous call to update UI from goroutine
 		widget.StatsLabel.Synchronize(func() {
 			widget.StatsLabel.SetText(update)
 		})
@@ -216,7 +226,6 @@ func runScan(
 	logger *logging.Logger,
 ) {
 	defer func() {
-		close(statsUpdateCh)
 		widget.StartBtn.Synchronize(func() {
 			isRunning.Store(false)
 			widget.StartBtn.SetEnabled(true)
@@ -224,88 +233,92 @@ func runScan(
 		})
 	}()
 
-	var totalTargets, processed, success, errors, totalDuration int64
+	ResetStats()
+
 	targetsChan := make(chan string, 1000)
 
-	go feedTargets(ctx, targetsFile, targetsChan, &totalTargets)
+	go func() {
+		defer close(targetsChan)
+
+		file, err := os.Open(targetsFile)
+		if err != nil {
+			logger.Error.Printf("Error opening targets file %s: %v", targetsFile, err)
+			return
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				target := strings.TrimSpace(scanner.Text())
+				if target == "" {
+					continue
+				}
+				normalized, err := NormalizeTarget(target)
+				if err != nil {
+					logger.Info.Printf("Skipping invalid target %s: %v", target, err)
+					continue
+				}
+				targetsChan <- normalized
+				IncrementTargets()
+			}
+		}
+	}()
 
 	processFn := func(ctx context.Context, target string) error {
 		startTime := time.Now()
 		matched, err := templates.MatchTemplate(ctx, target, "", template, advanced, logger)
-		durationMs := time.Since(startTime).Milliseconds()
+		duration := time.Since(startTime)
 
-		atomic.AddInt64(&processed, 1)
-		atomic.AddInt64(&totalDuration, durationMs)
+		IncrementProcessed()
+		AddDuration(duration)
 
 		if err != nil {
-			logger.Info.Printf("Error processing target %s: %v\n", target, err)
-			atomic.AddInt64(&errors, 1)
+			logger.Info.Printf("Error processing target %s: %v", target, err)
+			IncrementErrors()
 			return err
 		}
 
 		if matched {
 			templates.SaveGood(target, template.ID)
-			atomic.AddInt64(&success, 1)
+			IncrementSuccesses()
 			return nil
 		}
-
-		atomic.AddInt64(&errors, 1)
+		IncrementErrors()
 		return fmt.Errorf("no match found")
 	}
-
+	var tickerWg sync.WaitGroup
+	tickerWg.Add(1)
 	resultsDone := scanner.StartWorkers(ctx, targetsChan, threads, processFn, logger)
 
-	select {
-	case <-ctx.Done():
-		return
-	case <-resultsDone:
-	}
+	go func() {
+		defer tickerWg.Done()
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 
-	statsUpdateCh <- "Scan finished.\n" + formatStats(totalTargets, processed, success, errors, totalDuration)
-}
-
-// feedTargets reads targets from the file and sends them to the channel for scanning
-func feedTargets(ctx context.Context, targetsFile string, targetsChan chan<- string, totalTargets *int64) {
-	defer close(targetsChan)
-
-	file, err := os.Open(targetsFile)
-	if err != nil {
-		fmt.Printf("Error opening targets file %s: %v\n", targetsFile, err)
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			target := strings.TrimSpace(scanner.Text())
-			if target == "" {
-				continue
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case statsUpdateCh <- FormatEnhancedStats():
+				case <-ctx.Done():
+					return
+				}
+			case <-resultsDone:
+				return
 			}
-			normalized, err := NormalizeTarget(target)
-			if err != nil {
-				fmt.Printf("Skipping invalid target %s: %v\n", target, err)
-				continue
-			}
-			targetsChan <- normalized
-			atomic.AddInt64(totalTargets, 1)
 		}
-	}
-}
+	}()
 
-// formatStats formats the collected statistics at the end of scanning
-func formatStats(totalTargets, processed, success, errors, totalDuration int64) string {
-	var avgMs int64
-	if processed > 0 {
-		avgMs = totalDuration / processed
-	}
-	return fmt.Sprintf(
-		"Statistics:\nTargets loaded: %d\nProcessed: %d\nSuccesses: %d\nErrors: %d\nAvg time (ms): %d",
-		totalTargets, processed, success, errors, avgMs,
-	)
+	tickerWg.Wait()
+
+	statsUpdateCh <- "Scan finished.\n" + FormatEnhancedStats()
+	close(statsUpdateCh)
 }
 
 func NormalizeTarget(target string) (string, error) {
@@ -319,4 +332,70 @@ func NormalizeTarget(target string) (string, error) {
 	}
 
 	return normalized, nil
+}
+
+func FormatEnhancedStats() string {
+	stats := GetCurrentStats()
+
+	elapsed := time.Since(stats.StartTime)
+
+	return fmt.Sprintf(`Statistics:
+Targets loaded: %d
+Processed: %d
+Successes: %d
+Errors: %d
+Elapsed: %v`,
+		stats.TotalTargets,
+		stats.Processed,
+		stats.Successes,
+		stats.Errors,
+		elapsed.Truncate(time.Second),
+	)
+}
+
+// ResetStats resets all statistics
+func ResetStats() {
+	atomic.StoreInt64(&scanStats.TotalTargets, 0)
+	atomic.StoreInt64(&scanStats.Processed, 0)
+	atomic.StoreInt64(&scanStats.Successes, 0)
+	atomic.StoreInt64(&scanStats.Errors, 0)
+	atomic.StoreInt64(&scanStats.TotalDuration, 0)
+	scanStats.StartTime = time.Now()
+}
+
+// IncrementTargets increments the total targets counter
+func IncrementTargets() {
+	atomic.AddInt64(&scanStats.TotalTargets, 1)
+}
+
+// IncrementProcessed increments the processed counter
+func IncrementProcessed() {
+	atomic.AddInt64(&scanStats.Processed, 1)
+}
+
+// IncrementSuccesses increments the successes counter
+func IncrementSuccesses() {
+	atomic.AddInt64(&scanStats.Successes, 1)
+}
+
+// IncrementErrors increments the errors counter
+func IncrementErrors() {
+	atomic.AddInt64(&scanStats.Errors, 1)
+}
+
+// AddDuration adds processing duration
+func AddDuration(duration time.Duration) {
+	atomic.AddInt64(&scanStats.TotalDuration, duration.Milliseconds())
+}
+
+// GetCurrentStats returns current statistics snapshot
+func GetCurrentStats() ScanStats {
+	return ScanStats{
+		TotalTargets:  atomic.LoadInt64(&scanStats.TotalTargets),
+		Processed:     atomic.LoadInt64(&scanStats.Processed),
+		Successes:     atomic.LoadInt64(&scanStats.Successes),
+		Errors:        atomic.LoadInt64(&scanStats.Errors),
+		TotalDuration: atomic.LoadInt64(&scanStats.TotalDuration),
+		StartTime:     scanStats.StartTime,
+	}
 }

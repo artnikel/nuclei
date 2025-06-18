@@ -3,8 +3,10 @@ package templates
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,18 +19,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// newInsecureHTTTPClient returns HTTP client with TLS-certificate checking disabled
-func newInsecureHTTPClient(timeout time.Duration) *http.Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		MaxIdleConns:    100,
-		MaxConnsPerHost: 10,
-		IdleConnTimeout: 30 * time.Second,
+// newInsecureHTTPClient creates a new HTTP client with custom timeouts and TLS settings
+func newInsecureHTTPClient(advanced *AdvancedSettingsChecker) *http.Client {
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   advanced.ConnectionTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: advanced.ReadTimeout,
+		DisableKeepAlives:     false, // Enable keep-alive for better performance
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
 	}
 
 	return &http.Client{
-		Transport: tr,
-		Timeout:   timeout,
+		Transport: transport,
+		Timeout:   advanced.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Allow up to 10 redirects
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return nil
+		},
 	}
 }
 
@@ -84,7 +102,6 @@ func templateMatchesHost(tmpl *Template, targetHost string, logger *logging.Logg
 	logger.Info.Printf("Skipping template %s: host mismatch (target: %s, expected: %+v)", tmpl.ID, targetHost, tmpl.Hosts)
 	return false
 }
-
 
 // extractHTMLTitle extracts the contents of the <title> tag from the HTML document
 func extractHTMLTitle(r io.Reader) string {

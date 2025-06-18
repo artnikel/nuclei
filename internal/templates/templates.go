@@ -25,6 +25,11 @@ import (
 type AdvancedSettingsChecker struct {
 	Workers              int
 	Timeout              time.Duration
+	Retries              int
+	RetryDelay           time.Duration
+	MaxBodySize          int
+	ConnectionTimeout    time.Duration
+	ReadTimeout          time.Duration
 	HeadlessTabs         int
 	RateLimiterFrequency int
 	RateLimiterBurstSize int

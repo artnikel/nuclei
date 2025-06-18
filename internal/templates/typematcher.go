@@ -53,12 +53,20 @@ var (
 	httpClient   *http.Client
 )
 
-func getHTTPClient(timeout time.Duration) *http.Client {
+// HTTPResult represents the result of an HTTP request
+type HTTPResult struct {
+	Response *http.Response
+	Body     []byte
+	Error    error
+	Retries  int
+}
+
+func getHTTPClient(advanced *AdvancedSettingsChecker) *http.Client {
 	httpClientMu.Lock()
 	defer httpClientMu.Unlock()
 
 	if httpClient == nil {
-		httpClient = newInsecureHTTPClient(timeout)
+		httpClient = newInsecureHTTPClient(advanced)
 	}
 	return httpClient
 }
@@ -76,9 +84,92 @@ func getHostLimiter(host string, advanced *AdvancedSettingsChecker) *rate.Limite
 	return limiter
 }
 
-// matchHTTPRequest performs HTTP requests and matches responses
+// isRetryableError determines if an error is worth retrying
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	retryableErrors := []string{
+		"connection refused",
+		"connection reset by peer",
+		"no route to host",
+		"network is unreachable",
+		"timeout",
+		"temporary failure",
+		"server misbehaving",
+		"connection timed out",
+		"i/o timeout",
+	}
+
+	for _, retryable := range retryableErrors {
+		if strings.Contains(strings.ToLower(errStr), retryable) {
+			return true
+		}
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.Temporary() {
+		return true
+	}
+
+	return false
+}
+
+// doHTTPRequestWithRetry performs HTTP request with retry logic
+func doHTTPRequestWithRetry(ctx context.Context, client *http.Client, req *http.Request, advanced *AdvancedSettingsChecker, logger *logging.Logger) HTTPResult {
+	var lastErr error
+
+	for attempt := 0; attempt <= advanced.Retries; attempt++ {
+		reqClone := req.Clone(ctx)
+
+		resp, err := client.Do(reqClone)
+		if err == nil {
+			body, bodyErr := io.ReadAll(io.LimitReader(resp.Body, int64(advanced.MaxBodySize)))
+			resp.Body.Close()
+
+			if bodyErr != nil {
+				logger.Info.Printf("Failed to read response body for %s: %v", req.URL.String(), bodyErr)
+				return HTTPResult{Response: resp, Body: nil, Error: bodyErr, Retries: attempt}
+			}
+
+			return HTTPResult{Response: resp, Body: body, Error: nil, Retries: attempt}
+		}
+
+		lastErr = err
+
+		if !isRetryableError(err) {
+			break
+		}
+
+		if attempt == advanced.Retries {
+			break
+		}
+
+		waitTime := advanced.RetryDelay * time.Duration(attempt+1)
+		logger.Info.Printf("Request to %s failed (attempt %d/%d), retrying after %v: %v",
+			req.URL.String(), attempt+1, advanced.Retries+1, waitTime, err)
+
+		select {
+		case <-ctx.Done():
+			return HTTPResult{Error: ctx.Err(), Retries: attempt}
+		case <-time.After(waitTime):
+		}
+	}
+
+	return HTTPResult{Error: lastErr, Retries: advanced.Retries}
+}
+
+// matchHTTPRequest performs HTTP requests with improved error handling and retries
 func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
-	client := getHTTPClient(advanced.Timeout)
+	client := getHTTPClient(advanced)
 
 	method := req.Method
 	if method == "" {
@@ -99,6 +190,8 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 	vars["Host"] = parsedBaseURL.Host
 	vars["Hostname"] = parsedBaseURL.Hostname()
 
+	limiter := getHostLimiter(parsedBaseURL.Hostname(), advanced)
+
 	for _, p := range req.Path {
 		pathWithVars := substituteVariables(p, vars)
 		fullURL := buildFullURL(parsedBaseURL, pathWithVars)
@@ -108,54 +201,61 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 			return false, err
 		}
 
+		// Set default headers
+		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		httpReq.Header.Set("Accept", "*/*")
+		httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		httpReq.Header.Set("Accept-Encoding", "gzip, deflate")
+		httpReq.Header.Set("Connection", "keep-alive")
+
+		// Override with template headers
 		for k, v := range req.Headers {
 			httpReq.Header.Set(k, substituteVariables(v, vars))
 		}
-		
-		limiter := getHostLimiter(parsedBaseURL.Hostname(), advanced)
-		for {
-			err := limiter.Wait(ctx)
-			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) {
-					logger.Info.Printf("Rate limiter wait error for host %s: %v", parsedBaseURL.Host, err)
 
-					return false, nil
-				}
-				return false, err
+		// Apply rate limiting
+		err = limiter.Wait(ctx)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				logger.Info.Printf("Rate limiter timeout for host %s", parsedBaseURL.Host)
+				continue
 			}
-			break
+			return false, err
 		}
 
-		var httpLimiter = make(chan struct{}, advanced.Workers)
+		// Perform request with retries
+		result := doHTTPRequestWithRetry(ctx, client, httpReq, advanced, logger)
 
-		limitedDo := func(client *http.Client, req *http.Request) (*http.Response, error) {
-			httpLimiter <- struct{}{}
-			defer func() { <-httpLimiter }()
-			return client.Do(req)
-		}
+		if result.Error != nil {
+			// Log error based on severity
+			if isRetryableError(result.Error) {
+				logger.Info.Printf("HTTP request failed after %d retries for template %s, URL %s: %v",
+					result.Retries+1, tmpl.ID, fullURL, result.Error)
+			} else {
+				logger.Error.Printf("HTTP request failed for template %s, URL %s: %v",
+					tmpl.ID, fullURL, result.Error)
+			}
 
-		resp, err := limitedDo(client, httpReq)
-		if err != nil {
-			logger.Error.Printf("HTTP request error for template: %s request: %s err: %v", tmpl.ID, fullURL, err)
+			// Continue to next path instead of failing completely
 			continue
 		}
 
-		const maxBodySize = 10 * 1024 * 1024 // 10MB
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
-		resp.Body.Close()
-		if err != nil {
-			logger.Info.Printf("Failed to read body for %s: %v", fullURL, err)
-			continue
+		// Log successful request with retry info
+		if result.Retries > 0 {
+			logger.Info.Printf("HTTP request succeeded after %d retries for template %s, URL %s, status %d",
+				result.Retries+1, tmpl.ID, fullURL, result.Response.StatusCode)
 		}
 
 		matchCtx := MatchContext{
-			Resp: resp,
-			Body: body,
+			Resp: result.Response,
+			Body: result.Body,
 		}
 
 		matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
 
-		logger.Info.Printf("Template %s, request %s: matched=%v, status=%d", tmpl.ID, fullURL, matched, resp.StatusCode)
+		logger.Info.Printf("Template %s, request %s: matched=%v, status=%d, retries=%d",
+			tmpl.ID, fullURL, matched, result.Response.StatusCode, result.Retries)
+
 		if matched {
 			return true, nil
 		}

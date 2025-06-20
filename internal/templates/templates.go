@@ -25,8 +25,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-
-
 // LoadTemplate loads and parses YAML template from the specified path
 func LoadTemplate(path string) (*Template, error) {
 	if !(strings.HasSuffix(path, constants.YamlFileFormat) || strings.HasSuffix(path, constants.YmlFileFormat)) {
@@ -165,12 +163,47 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 		return false, fmt.Errorf("template %s has no requests", tmpl.ID)
 	}
 
+	results := make(map[int]bool)
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return false, err
 	}
 	host := parsedURL.Hostname()
+    if tmpl.Flow != "" {
+    
+        parts := strings.Split(tmpl.Flow, "&&")
+        for _, part := range parts {
+            part = strings.TrimSpace(part)
+            if strings.HasPrefix(part, "http(") && strings.HasSuffix(part, ")") {
+                idxStr := part[5 : len(part)-1]
+                idx, err := strconv.Atoi(idxStr)
+                if err != nil || idx < 1 || idx > len(tmpl.Requests) {
+                    return false, fmt.Errorf("invalid flow request index: %s", idxStr)
+                }
+                req := tmpl.Requests[idx-1]
 
+                matched := false
+                switch req.Type {
+                case "http", "":
+                    if canOfflineMatchRequest(req) && htmlContent != "" {
+                        matched = matchOfflineHTML(htmlContent, req, tmpl, logger)
+                    }
+                    if !matched {
+                        matched, err = matchHTTPRequest(ctx, baseURL, req, tmpl, advanced, logger)
+                        if err != nil {
+                            return false, err
+                        }
+                    }
+                }
+
+                results[idx] = matched
+                if !matched {
+                    return false, nil
+                }
+            }
+        }
+        return true, nil
+    }
 	for _, req := range tmpl.Requests {
 		select {
 		case <-ctx.Done():
@@ -237,7 +270,7 @@ func MatchTemplate(ctx context.Context, baseURL string, htmlContent string, tmpl
 }
 
 // checkMatchers checks the list of matchers according to the given condition (and/or)
-func checkMatchers(matchers []Matcher, condition string, ctx MatchContext) bool {
+func checkMatchers(matchers []Matcher, condition string, ctx MatchContext, logger *logging.Logger) bool {
 	if len(matchers) == 0 {
 		return true
 	}
@@ -249,7 +282,7 @@ func checkMatchers(matchers []Matcher, condition string, ctx MatchContext) bool 
 
 	results := make([]bool, len(matchers))
 	for i, m := range matchers {
-		results[i] = checkSingleMatcher(m, ctx)
+		results[i] = checkSingleMatcher(m, ctx, logger)
 	}
 
 	if condition == "or" {
@@ -270,37 +303,57 @@ func checkMatchers(matchers []Matcher, condition string, ctx MatchContext) bool 
 }
 
 // checkSingleMatcher checks a single matcher against the server response
-func checkSingleMatcher(m Matcher, ctx MatchContext) bool {
+func checkSingleMatcher(m Matcher, ctx MatchContext, logger *logging.Logger) bool {
 	switch m.Type {
 	case "status":
 		if ctx.Resp == nil {
 			return false
 		}
-		return slices.Contains(m.Status, ctx.Resp.StatusCode)
+		ok := slices.Contains(m.Status, ctx.Resp.StatusCode)
+		if ok {
+			logger.Info.Printf("Matcher type=status matched: expected %v, got %d", m.Status, ctx.Resp.StatusCode)
+		}
+		return ok
 
 	case "word":
 		if ctx.Resp == nil {
 			return false
 		}
-		return matchWordsByPart(ctx.Resp, ctx.Body, m.Words, m.Part, m.Condition, m.NoCase)
+		ok := matchWordsByPart(ctx.Resp, ctx.Body, m.Words, m.Part, m.Condition, m.NoCase)
+		if ok {
+			logger.Info.Printf("Matcher type=word matched: part=%s, words=%v", m.Part, m.Words)
+		}
+		return ok
 
 	case "regex":
 		if ctx.Resp == nil {
 			return false
 		}
-		return matchRegexListByPart(ctx.Resp, ctx.Body, m.Regex, m.Part, m.NoCase)
+		ok := matchRegexListByPart(ctx.Resp, ctx.Body, m.Regex, m.Part, m.NoCase)
+		if ok {
+			logger.Info.Printf("Matcher type=regex matched: part=%s, regex=%v", m.Part, m.Regex)
+		}
+		return ok
 
 	case "size":
 		if ctx.Resp == nil {
 			return false
 		}
-		return matchSizeByPart(ctx.Resp, ctx.Body, m.Size, m.Part)
+		ok := matchSizeByPart(ctx.Resp, ctx.Body, m.Size, m.Part)
+		if ok {
+			logger.Info.Printf("Matcher type=size matched: part=%s, size=%v", m.Part, m.Size)
+		}
+		return ok
 
 	case "dlength":
 		if ctx.Resp == nil {
 			return false
 		}
-		return matchDlengthByPart(ctx.Resp, ctx.Body, m.Condition, m.Dlength, m.Part)
+		ok := matchDlengthByPart(ctx.Resp, ctx.Body, m.Condition, m.Dlength, m.Part)
+		if ok {
+			logger.Info.Printf("Matcher type=dlength matched: condition=%s, dlength=%v, part=%s", m.Condition, m.Dlength, m.Part)
+		}
+		return ok
 
 	case "binary":
 		if ctx.Resp == nil {
@@ -310,13 +363,19 @@ func checkSingleMatcher(m Matcher, ctx MatchContext) bool {
 		for _, b := range m.Binary {
 			binaries = append(binaries, []byte(b))
 		}
-		return matchBinaryByPart(ctx.Resp, ctx.Body, binaries, m.Part)
+		ok := matchBinaryByPart(ctx.Resp, ctx.Body, binaries, m.Part)
+		if ok {
+			logger.Info.Printf("Matcher type=binary matched: part=%s, binary patterns=%v", m.Part, m.Binary)
+		}
+		return ok
+
 	case "xpath":
 		if ctx.Body == nil {
 			return false
 		}
 		for _, xpath := range m.XPath {
 			if matchXPathByPart(ctx.Body, xpath) {
+				logger.Info.Printf("Matcher type=xpath matched: xpath=%s", xpath)
 				return true
 			}
 		}
@@ -326,34 +385,79 @@ func checkSingleMatcher(m Matcher, ctx MatchContext) bool {
 		if ctx.Body == nil {
 			return false
 		}
-		return matchJSONByPart(ctx.Body, m.JSONPath)
+		ok := matchJSONByPart(ctx.Body, m.JSONPath)
+		if ok {
+			logger.Info.Printf("Matcher type=json matched: jsonPath=%s", m.JSONPath)
+		}
+		return ok
 
 	case "dns":
 		if ctx.DNS == nil {
 			return false
 		}
-		return matchDNSByPattern(ctx.DNS, m.Pattern)
+		ok := matchDNSByPattern(ctx.DNS, m.Pattern)
+		if ok {
+			logger.Info.Printf("Matcher type=dns matched: pattern=%s", m.Pattern)
+		}
+		return ok
+
 	case "network":
 		if ctx.Network == nil {
 			return false
 		}
-		return matchNetworkByPattern(ctx.Network, m.Pattern)
+		ok := matchNetworkByPattern(ctx.Network, m.Pattern)
+		if ok {
+			logger.Info.Printf("Matcher type=network matched: pattern=%s", m.Pattern)
+		}
+		return ok
+
 	case "headless":
 		if ctx.Headless == nil {
 			return false
 		}
-		return matchHeadlessByPattern(ctx.Headless, m)
+		ok := matchHeadlessByPattern(ctx.Headless, m)
+		if ok {
+			logger.Info.Printf("Matcher type=headless matched")
+		}
+		return ok
+
 	case "dsl":
 		if ctx.Resp == nil {
 			return false
 		}
+		condition := "and"
+		if m.Condition != "" {
+			condition = m.Condition
+		}
+
+		results := make([]bool, 0, len(m.DSL))
 		for _, expr := range m.DSL {
 			matched, err := evaluateDSL(expr, ctx.Resp, ctx.Body)
-			if err == nil && matched {
-				return true
+			if err != nil {
+				logger.Error.Printf("DSL evaluation error for expr %q: %v", expr, err)
+				return false
 			}
+			//logger.Info.Printf("Matcher type=dsl evaluated expr=%q result=%v", expr, matched)
+			results = append(results, matched)
+		}
+
+		if condition == "and" {
+			for _, r := range results {
+				if !r {
+					return false
+				}
+			}
+			return true
+		} else if condition == "or" {
+			for _, r := range results {
+				if r {
+					return true
+				}
+			}
+			return false
 		}
 		return false
+
 	default:
 		return false
 	}

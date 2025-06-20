@@ -22,6 +22,7 @@ type Template struct {
 	Variables        map[string]interface{} `yaml:"variables,omitempty"`
 	StopAtFirstMatch bool                   `yaml:"stop-at-first-match,omitempty"`
 	RequestCondition string                 `yaml:"req-condition,omitempty"`
+	Flow             string                 `yaml:"flow,omitempty"`
 
 	RequestsRaw []*Request `yaml:"requests,omitempty"`
 	HTTPRaw     []*Request `yaml:"http,omitempty"`

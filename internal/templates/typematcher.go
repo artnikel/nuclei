@@ -298,11 +298,13 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 				Body: result.Body,
 			}
 
-			matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+			matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx, logger)
 			logger.Info.Printf("Template %s, request %s: matched=%v, status=%d, retries=%d",
 				tmpl.ID, currentURL, matched, result.Response.StatusCode, result.Retries)
 
 			if matched {
+				//logger.Info.Printf("Response body:\n%s", result.Body)
+
 				// extractedData := processExtractors(req.Extractors, result, tmpl)
 				// logger.Info.Printf("Extracted data: %+v", extractedData)
 				return true, nil
@@ -392,7 +394,7 @@ func matchDNSRequest(host string, req *Request, tmpl *Template, logger *logging.
 		},
 	}
 
-	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx, logger)
 	logger.Info.Printf("Template %s, DNS request for host %s, query type %s: matched=%v, records=%v",
 		tmpl.ID, host, queryType, matched, records)
 
@@ -470,7 +472,7 @@ func matchNetworkRequest(ctx context.Context, host string, req *Request, tmpl *T
 		},
 	}
 
-	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx, logger)
 
 	logger.Info.Printf("Template %s, network request to %s: matched=%v", tmpl.ID, host, matched)
 
@@ -496,7 +498,7 @@ func matchHeadlessRequest(ctx context.Context, baseURL string, req *Request, tmp
 		Body: []byte(htmlContent),
 	}
 
-	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+	matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx, logger)
 
 	logger.Info.Printf(
 		"Template %s, headless request to %s: matched=%v, response_len=%d",

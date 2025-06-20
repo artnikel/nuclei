@@ -33,12 +33,12 @@ type ScannerPageWidget struct {
 
 // ScanStats holds comprehensive scanning statistics
 type ScanStats struct {
-	TotalTargets   int64
-	Processed      int64
-	Successes      int64
-	Errors         int64
-	TotalDuration  int64
-	StartTime      time.Time
+	TotalTargets  int64
+	Processed     int64
+	Successes     int64
+	Errors        int64
+	TotalDuration int64
+	StartTime     time.Time
 }
 
 var (
@@ -283,8 +283,8 @@ func runScan(
 		}
 
 		if matched {
-			templates.SaveGood(target, template.ID)
 			IncrementSuccesses()
+			templates.SaveGood(target)
 			return nil
 		}
 		IncrementErrors()

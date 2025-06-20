@@ -3,9 +3,11 @@ module github.com/artnikel/nuclei
 go 1.23.0
 
 require (
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/antchfx/htmlquery v1.3.4
 	github.com/chromedp/chromedp v0.13.6
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
+	github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0
 	golang.org/x/net v0.35.0
 	gopkg.in/yaml.v3 v3.0.1
 

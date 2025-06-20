@@ -4,6 +4,7 @@ package templates
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,8 @@ type Template struct {
 	Requests []*Request `yaml:"-"`
 
 	Hosts []string `yaml:"hosts,omitempty"`
+
+	FilePath string `yaml:"-"`
 }
 
 type Info struct {
@@ -66,9 +69,10 @@ type Matcher struct {
 	Regex     []string `yaml:"regex,omitempty"`
 	Size      int      `yaml:"size,omitempty"`
 	Dlength   int      `yaml:"dlength,omitempty"`
-	Binary    []string   `yaml:"binary,omitempty"`
-	XPath     []string   `yaml:"xpath,omitempty"`
+	Binary    []string `yaml:"binary,omitempty"`
+	XPath     []string `yaml:"xpath,omitempty"`
 	JSONPath  string   `yaml:"jsonpath,omitempty"`
+	DSL       []string `yaml:"dsl,omitempty"`
 	NoCase    bool     `yaml:"nocase,omitempty"`
 }
 
@@ -79,7 +83,7 @@ type Extractor struct {
 	Regex    []string `yaml:"regex,omitempty"`
 	Name     string   `yaml:"name,omitempty"`
 	NoCase   bool     `yaml:"nocase,omitempty"`
-	XPath    []string   `yaml:"xpath,omitempty"`
+	XPath    []string `yaml:"xpath,omitempty"`
 	JSONPath string   `yaml:"jsonpath,omitempty"`
 	Base64   bool     `yaml:"base64,omitempty"`
 }
@@ -87,6 +91,19 @@ type Extractor struct {
 type Condition struct {
 	Type string   `yaml:"type,omitempty"`
 	DSL  []string `yaml:"dsl,omitempty"`
+}
+
+type AdvancedSettingsChecker struct {
+	Workers              int
+	Timeout              time.Duration
+	Retries              int
+	RetryDelay           time.Duration
+	MaxBodySize          int
+	ConnectionTimeout    time.Duration
+	ReadTimeout          time.Duration
+	HeadlessTabs         int
+	RateLimiterFrequency int
+	RateLimiterBurstSize int
 }
 
 type Tags []string

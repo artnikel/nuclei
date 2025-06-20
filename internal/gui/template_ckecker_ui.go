@@ -198,13 +198,11 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 		var totalTemplates int
 		var currentChecked atomic.Int32
 
-		// Прогресс обновляется из MatchTemplate
 		progressCallback := func(i, total int) {
 			currentChecked.Store(int32(i))
 			totalTemplates = total
 		}
 
-		// Обновление UI каждую секунду
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
@@ -254,17 +252,26 @@ func checkTemplatesAction(parent walk.Form, widget *TemplateCheckerPageWidget, l
 				widget.ResultsOutput.SetText(strings.Join(lines, "\n"))
 				widget.CreateTemplateBtn.SetEnabled(true)
 			} else {
-				lines = append(lines, "\n Total matching: "+strconv.Itoa(len(matched)))
-				lines = append(lines, "\n Matching templates:")
-				for _, tmpl := range matched {
-					lines = append(lines, " / "+tmpl.ID)
+				lines = append(lines, "\r\nTotal matching: "+strconv.Itoa(len(matched)))
+				lines = append(lines, "\r\nMatching templates:")
+				for i, tmpl := range matched {
+					templatePath := ensureYamlExtension(tmpl.FilePath)
+					lines = append(lines, fmt.Sprintf("%d. %s", i+1, templatePath))
 				}
-				result := strings.Join(lines, "\n")
+				result := strings.Join(lines, "\r\n")
 				widget.ResultsOutput.SetText(result)
 			}
 		})
 	}()
+}
 
+func ensureYamlExtension(filePath string) string {
+	if strings.HasSuffix(strings.ToLower(filePath), ".yml") {
+		return filePath[:len(filePath)-4] + ".yaml"
+	} else if !strings.HasSuffix(strings.ToLower(filePath), ".yaml") {
+		return filePath + ".yaml"
+	}
+	return filePath
 }
 
 // createTemplateAction generates a template for the specified URL and offers to save it to a file

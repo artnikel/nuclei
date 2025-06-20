@@ -19,6 +19,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var goodResultsMu sync.Mutex
+
 // newInsecureHTTPClient creates a new HTTP client with custom timeouts and TLS settings
 func newInsecureHTTPClient(advanced *AdvancedSettingsChecker) *http.Client {
 	transport := &http.Transport{
@@ -55,13 +57,16 @@ func buildFullURL(base *url.URL, path string) string {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return path
 	}
-	u := *base
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+
+	ref, err := url.Parse(path)
+	if err != nil {
+		// Если path не парсится как URL, возвращаем базу + path с добавлением слэша
+		return base.Scheme + "://" + base.Host + "/" + strings.TrimLeft(path, "/")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + path
-	return u.String()
+
+	return base.ResolveReference(ref).String()
 }
+
 
 // substituteVariables replaces placeholders of the {{key}} form with values from vars
 func substituteVariables(s string, vars map[string]interface{}) string {
@@ -165,9 +170,7 @@ func isProfileFile(data []byte) (bool, error) {
 	return len(prof.Severity) > 0 || len(prof.Type) > 0 || len(prof.ExcludeID) > 0, nil
 }
 
-var goodResultsMu sync.Mutex
-
-func SaveGood(target, templateID string) {
+func SaveGood(target string) {
 	goodResultsMu.Lock()
 	defer goodResultsMu.Unlock()
 
@@ -178,5 +181,14 @@ func SaveGood(target, templateID string) {
 	}
 	defer f.Close()
 
-	_, _ = fmt.Fprintf(f, "%s -> %s\n", target, templateID)
+	_, _ = fmt.Fprintf(f, "%s \n", target)
+}
+
+func normalizeURL(rawurl string) string {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return rawurl
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
 }

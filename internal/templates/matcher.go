@@ -7,11 +7,37 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 
+	"github.com/Knetic/govaluate"
 	"github.com/antchfx/htmlquery"
+	"github.com/yalp/jsonpath"
+	"golang.org/x/net/html"
 )
+
+func flexibleContains(text, pattern string) bool {
+	normalizeQuotes := func(s string) string {
+		s = strings.ReplaceAll(s, `\"`, `"`)
+		s = strings.ReplaceAll(s, `\'`, `'`)
+		s = strings.ReplaceAll(s, `"`, `"`)
+		s = strings.ReplaceAll(s, `'`, `"`)
+		return s
+	}
+
+	normalizeSpaces := func(s string) string {
+		s = strings.ReplaceAll(s, "\n", "")
+		s = strings.ReplaceAll(s, "\r", "")
+		s = strings.ReplaceAll(s, "\t", "")
+		s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+		s = strings.TrimSpace(s)
+		return s
+	}
+
+	normalizedText := normalizeSpaces(normalizeQuotes(text))
+	normalizedPattern := normalizeSpaces(normalizeQuotes(pattern))
+
+	return strings.Contains(normalizedText, normalizedPattern)
+}
 
 // matchBinaryByPart checks for the presence of a binary pattern in the specified part of the response
 func matchBinaryByPart(resp *http.Response, body []byte, patterns [][]byte, part string) bool {
@@ -43,7 +69,6 @@ func matchBinaryByPart(resp *http.Response, body []byte, patterns [][]byte, part
 	}
 	return false
 }
-
 
 // matchDlengthByPart compares the length of the data in the answer part with the specified condition
 func matchDlengthByPart(resp *http.Response, body []byte, operator string, length int, part string) bool {
@@ -90,44 +115,46 @@ func matchDlengthByPart(resp *http.Response, body []byte, operator string, lengt
 
 // matchXPathByPart checks for XPath nodes in the body of the HTML response
 func matchXPathByPart(body []byte, xpathExpr string) bool {
-	doc, err := htmlquery.Parse(bytes.NewReader(body))
+	nodes, err := matchXPathNodesByPart(body, xpathExpr)
 	if err != nil {
 		return false
 	}
-	nodes := htmlquery.Find(doc, xpathExpr)
 	return len(nodes) > 0
 }
 
-// getJSONValue retrieves a value from JSON at path
-func getJSONValue(body []byte, path string) interface{} {
-	var data interface{}
-	err := json.Unmarshal(body, &data)
+func matchXPathNodesByPart(body []byte, xpathExpr string) ([]*html.Node, error) {
+	doc, err := htmlquery.Parse(bytes.NewReader(body))
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	parts := strings.Split(path, ".")
-	cur := data
-	for _, p := range parts {
-		switch v := cur.(type) {
-		case map[string]any:
-			cur = v[p]
-		case []any:
-			idx, err := strconv.Atoi(p)
-			if err != nil || idx < 0 || idx >= len(v) {
-				return nil
-			}
-			cur = v[idx]
-		default:
-			return nil
-		}
-	}
-	return cur
+	nodes := htmlquery.Find(doc, xpathExpr)
+	return nodes, nil
 }
 
-// matchJSONByPart проверяет наличие значения по JSON-пути в теле ответа
-func matchJSONByPart(body []byte, jsonPath string) bool {
-	val := getJSONValue(body, jsonPath)
-	return val != nil
+func matchJSONByPart(body []byte, jsonPathExpr string) bool {
+	vals, err := extractJSONByPath(body, jsonPathExpr)
+	if err != nil {
+		return false
+	}
+	return len(vals) > 0
+}
+
+func extractJSONByPath(body []byte, jsonPathExpr string) ([]interface{}, error) {
+	var data interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+	vals, err := jsonpath.Read(data, jsonPathExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := vals.(type) {
+	case []interface{}:
+		return v, nil
+	default:
+		return []interface{}{v}, nil
+	}
 }
 
 // matchJSONByPart checks if the value exists along the JSON path in the response body
@@ -164,7 +191,7 @@ func matchWordsByPart(resp *http.Response, body []byte, words []string, part, co
 
 	if condition == "and" {
 		for _, w := range words {
-			if !strings.Contains(text, w) {
+			if !flexibleContains(text, w) {
 				return false
 			}
 		}
@@ -172,7 +199,7 @@ func matchWordsByPart(resp *http.Response, body []byte, words []string, part, co
 	}
 
 	for _, w := range words {
-		if strings.Contains(text, w) {
+		if flexibleContains(text, w) {
 			return true
 		}
 	}
@@ -211,7 +238,7 @@ func matchRegexListByPart(resp *http.Response, body []byte, regexList []string, 
 		}
 		re, err := regexp.Compile(prefix + regexStr)
 		if err != nil {
-			continue 
+			continue
 		}
 		if re.MatchString(text) {
 			return true
@@ -220,7 +247,6 @@ func matchRegexListByPart(resp *http.Response, body []byte, regexList []string, 
 
 	return false
 }
-
 
 // matchSizeByPart compares the size of the specified response part with the specified value
 func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bool {
@@ -246,16 +272,16 @@ func matchSizeByPart(resp *http.Response, body []byte, size int, part string) bo
 
 // matchDNSByPattern checks if any DNS record contains the pattern (case-insensitive)
 func matchDNSByPattern(dnsResp *DNSResponse, pattern string) bool {
-    if dnsResp == nil {
-        return false
-    }
+	if dnsResp == nil {
+		return false
+	}
 
-    for _, record := range dnsResp.Records {
-        if strings.Contains(strings.ToLower(record), strings.ToLower(pattern)) {
-            return true
-        }
-    }
-    return false
+	for _, record := range dnsResp.Records {
+		if strings.Contains(strings.ToLower(record), strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchNetworkByPattern checks if the network response data contains the pattern bytes
@@ -295,4 +321,62 @@ func matchHeadlessByPattern(resp *HeadlessResponse, m Matcher) bool {
 	return false
 }
 
+func evaluateDSL(dsl string, resp *http.Response, body []byte) (bool, error) {
+	bodyStr := string(body)
+	statusCode := resp.StatusCode
 
+	parameters := map[string]interface{}{
+		"status_code": statusCode,
+		"body":        bodyStr,
+	}
+
+	functions := map[string]govaluate.ExpressionFunction{
+		"contains": func(args ...interface{}) (interface{}, error) {
+			if len(args) != 2 {
+				return false, nil
+			}
+			haystack, ok1 := args[0].(string)
+			needle, ok2 := args[1].(string)
+			if !ok1 || !ok2 {
+				return false, nil
+			}
+
+			result := flexibleContains(haystack, needle)
+
+			return result, nil
+		},
+		"regex": func(args ...interface{}) (interface{}, error) {
+			if len(args) != 2 {
+				return false, nil
+			}
+			pattern, ok1 := args[0].(string)
+			subject, ok2 := args[1].(string)
+			if !ok1 || !ok2 {
+				return false, nil
+			}
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return false, nil
+			}
+			result := re.MatchString(subject)
+			return result, nil
+		},
+	}
+
+	expression, err := govaluate.NewEvaluableExpressionWithFunctions(dsl, functions)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := expression.Evaluate(parameters)
+	if err != nil {
+		return false, err
+	}
+
+	boolResult, ok := result.(bool)
+	if !ok {
+		return false, fmt.Errorf("expression did not evaluate to bool")
+	}
+
+	return boolResult, nil
+}

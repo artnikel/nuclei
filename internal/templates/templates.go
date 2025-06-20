@@ -3,12 +3,15 @@ package templates
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,18 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type AdvancedSettingsChecker struct {
-	Workers              int
-	Timeout              time.Duration
-	Retries              int
-	RetryDelay           time.Duration
-	MaxBodySize          int
-	ConnectionTimeout    time.Duration
-	ReadTimeout          time.Duration
-	HeadlessTabs         int
-	RateLimiterFrequency int
-	RateLimiterBurstSize int
-}
+
 
 // LoadTemplate loads and parses YAML template from the specified path
 func LoadTemplate(path string) (*Template, error) {
@@ -54,6 +46,7 @@ func LoadTemplate(path string) (*Template, error) {
 		}
 		return nil, fmt.Errorf("failed to parse file %s: %w", path, err)
 	}
+	tmpl.FilePath = path
 	tmpl.NormalizeRequests()
 
 	tmpl.Requests = append(tmpl.Requests, tmpl.RequestsRaw...)
@@ -350,7 +343,87 @@ func checkSingleMatcher(m Matcher, ctx MatchContext) bool {
 			return false
 		}
 		return matchHeadlessByPattern(ctx.Headless, m)
+	case "dsl":
+		if ctx.Resp == nil {
+			return false
+		}
+		for _, expr := range m.DSL {
+			matched, err := evaluateDSL(expr, ctx.Resp, ctx.Body)
+			if err == nil && matched {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
+}
+
+func processExtractors(extractors []Extractor, result HTTPResult, tmpl *Template) error {
+	bodyStr := string(result.Body)
+
+	for _, extractor := range extractors {
+		switch extractor.Type {
+		case "regex":
+			for _, pattern := range extractor.Regex {
+				reFlags := ""
+				if extractor.NoCase {
+					reFlags = "(?i)"
+				}
+				re, err := regexp.Compile(reFlags + pattern)
+				if err != nil {
+					continue
+				}
+
+				matches := re.FindStringSubmatch(bodyStr)
+				if len(matches) > 0 {
+					groupIndex := 0
+					if extractor.Group != "" {
+						gi, err := strconv.Atoi(extractor.Group)
+						if err == nil && gi < len(matches) {
+							groupIndex = gi
+						}
+					} else if len(matches) > 1 {
+						groupIndex = 1
+					}
+					value := matches[groupIndex]
+
+					if extractor.Base64 {
+						decoded, err := base64.StdEncoding.DecodeString(value)
+						if err == nil {
+							value = string(decoded)
+						}
+					}
+
+					tmpl.Variables[extractor.Name] = value
+					break
+				}
+			}
+
+		case "xpath":
+			if len(extractor.XPath) == 0 || len(bodyStr) == 0 {
+				continue
+			}
+			for _, path := range extractor.XPath {
+				vals, err := matchXPathNodesByPart([]byte(bodyStr), path)
+				if err == nil && len(vals) > 0 {
+					tmpl.Variables[extractor.Name] = vals[0]
+					break
+				}
+			}
+
+		case "jsonpath":
+			if extractor.JSONPath == "" || len(bodyStr) == 0 {
+				continue
+			}
+			vals, err := extractJSONByPath([]byte(bodyStr), extractor.JSONPath)
+			if err == nil && len(vals) > 0 {
+				tmpl.Variables[extractor.Name] = vals[0]
+			}
+
+		default:
+		}
+	}
+
+	return nil
 }

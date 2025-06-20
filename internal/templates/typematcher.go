@@ -2,6 +2,7 @@
 package templates
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -123,6 +124,21 @@ func isRetryableError(err error) bool {
 	return false
 }
 
+func parseJSRedirect(body string) string {
+	prefix := `top.location="`
+	start := strings.Index(body, prefix)
+	if start == -1 {
+		return ""
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], `"`)
+	if end == -1 {
+		return ""
+	}
+	redirectPath := body[start : start+end]
+	return redirectPath
+}
+
 // doHTTPRequestWithRetry performs HTTP request with retry logic
 func doHTTPRequestWithRetry(ctx context.Context, client *http.Client, req *http.Request, advanced *AdvancedSettingsChecker, logger *logging.Logger) HTTPResult {
 	var lastErr error
@@ -132,7 +148,25 @@ func doHTTPRequestWithRetry(ctx context.Context, client *http.Client, req *http.
 
 		resp, err := client.Do(reqClone)
 		if err == nil {
-			body, bodyErr := io.ReadAll(io.LimitReader(resp.Body, int64(advanced.MaxBodySize)))
+			var reader io.ReadCloser
+			switch resp.Header.Get("Content-Encoding") {
+			case "gzip":
+				gzReader, gzErr := gzip.NewReader(resp.Body)
+				if gzErr != nil {
+					logger.Info.Printf("Failed to create gzip reader for %s: %v", req.URL.String(), gzErr)
+					resp.Body.Close()
+					return HTTPResult{Response: resp, Body: nil, Error: gzErr, Retries: attempt}
+				}
+				reader = gzReader
+			default:
+				reader = resp.Body
+			}
+
+			body, bodyErr := io.ReadAll(io.LimitReader(reader, int64(advanced.MaxBodySize)))
+
+			if reader != resp.Body {
+				reader.Close()
+			}
 			resp.Body.Close()
 
 			if bodyErr != nil {
@@ -167,6 +201,8 @@ func doHTTPRequestWithRetry(ctx context.Context, client *http.Client, req *http.
 	return HTTPResult{Error: lastErr, Retries: advanced.Retries}
 }
 
+
+
 // matchHTTPRequest performs HTTP requests with improved error handling and retries
 func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *Template, advanced *AdvancedSettingsChecker, logger *logging.Logger) (bool, error) {
 	client := getHTTPClient(advanced)
@@ -194,70 +230,92 @@ func matchHTTPRequest(ctx context.Context, baseURL string, req *Request, tmpl *T
 
 	for _, p := range req.Path {
 		pathWithVars := substituteVariables(p, vars)
-		fullURL := buildFullURL(parsedBaseURL, pathWithVars)
+		currentURL := buildFullURL(parsedBaseURL, pathWithVars)
 
-		httpReq, err := http.NewRequestWithContext(ctx, method, fullURL, nil)
-		if err != nil {
-			return false, err
-		}
+		visitedRedirects := make(map[string]struct{})
+		redirectCount := 0
+		maxRedirects := 5
 
-		// Set default headers
-		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		httpReq.Header.Set("Accept", "*/*")
-		httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		httpReq.Header.Set("Accept-Encoding", "gzip, deflate")
-		httpReq.Header.Set("Connection", "keep-alive")
-
-		// Override with template headers
-		for k, v := range req.Headers {
-			httpReq.Header.Set(k, substituteVariables(v, vars))
-		}
-
-		// Apply rate limiting
-		err = limiter.Wait(ctx)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				logger.Info.Printf("Rate limiter timeout for host %s", parsedBaseURL.Host)
-				continue
+		for {
+			if redirectCount > maxRedirects {
+				logger.Info.Printf("Max redirects (%d) reached for URL %s", maxRedirects, currentURL)
+				break
 			}
-			return false, err
-		}
+			normalizedURL := normalizeURL(currentURL)
+			if _, visited := visitedRedirects[normalizedURL]; visited {
+				logger.Info.Printf("Redirect loop detected at %s, stopping", currentURL)
+				break
+			}
+			visitedRedirects[normalizedURL] = struct{}{}
 
-		// Perform request with retries
-		result := doHTTPRequestWithRetry(ctx, client, httpReq, advanced, logger)
+			doRequest := func(url string) (HTTPResult, error) {
+				httpReq, err := http.NewRequestWithContext(ctx, method, url, nil)
+				if err != nil {
+					return HTTPResult{}, err
+				}
 
-		if result.Error != nil {
-			// Log error based on severity
-			if isRetryableError(result.Error) {
-				logger.Info.Printf("HTTP request failed after %d retries for template %s, URL %s: %v",
-					result.Retries+1, tmpl.ID, fullURL, result.Error)
-			} else {
-				logger.Error.Printf("HTTP request failed for template %s, URL %s: %v",
-					tmpl.ID, fullURL, result.Error)
+				httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+				httpReq.Header.Set("Accept", "*/*")
+				httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+				httpReq.Header.Set("Accept-Encoding", "gzip, deflate")
+				httpReq.Header.Set("Connection", "keep-alive")
+
+				for k, v := range req.Headers {
+					httpReq.Header.Set(k, substituteVariables(v, vars))
+				}
+
+				if err := limiter.Wait(ctx); err != nil {
+					return HTTPResult{}, err
+				}
+
+				return doHTTPRequestWithRetry(ctx, client, httpReq, advanced, logger), nil
 			}
 
-			// Continue to next path instead of failing completely
-			continue
-		}
+			result, err := doRequest(currentURL)
+			if err != nil {
+				logger.Error.Printf("HTTP request creation/limiter error for template %s, URL %s: %v", tmpl.ID, currentURL, err)
+				break
+			}
 
-		// Log successful request with retry info
-		if result.Retries > 0 {
-			logger.Info.Printf("HTTP request succeeded after %d retries for template %s, URL %s, status %d",
-				result.Retries+1, tmpl.ID, fullURL, result.Response.StatusCode)
-		}
+			if result.Error != nil {
+				if isRetryableError(result.Error) {
+					logger.Info.Printf("HTTP request failed after %d retries for template %s, URL %s: %v",
+						result.Retries+1, tmpl.ID, currentURL, result.Error)
+				} else {
+					logger.Error.Printf("HTTP request failed for template %s, URL %s: %v",
+						tmpl.ID, currentURL, result.Error)
+				}
+				break
+			}
 
-		matchCtx := MatchContext{
-			Resp: result.Response,
-			Body: result.Body,
-		}
+			if result.Retries > 0 {
+				logger.Info.Printf("HTTP request succeeded after %d retries for template %s, URL %s, status %d",
+					result.Retries+1, tmpl.ID, currentURL, result.Response.StatusCode)
+			}
 
-		matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+			matchCtx := MatchContext{
+				Resp: result.Response,
+				Body: result.Body,
+			}
 
-		logger.Info.Printf("Template %s, request %s: matched=%v, status=%d, retries=%d",
-			tmpl.ID, fullURL, matched, result.Response.StatusCode, result.Retries)
+			matched := checkMatchers(req.Matchers, req.MatchersCondition, matchCtx)
+			logger.Info.Printf("Template %s, request %s: matched=%v, status=%d, retries=%d",
+				tmpl.ID, currentURL, matched, result.Response.StatusCode, result.Retries)
 
-		if matched {
-			return true, nil
+			if matched {
+				// extractedData := processExtractors(req.Extractors, result, tmpl)
+				// logger.Info.Printf("Extracted data: %+v", extractedData)
+				return true, nil
+			}
+
+			bodyStr := string(result.Body)
+			redirectPath := parseJSRedirect(bodyStr)
+			if redirectPath == "" {
+				break
+			}
+
+			currentURL = buildFullURL(parsedBaseURL, redirectPath)
+			redirectCount++
 		}
 	}
 

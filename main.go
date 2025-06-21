@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime/debug"
 	"time"
 
 	"github.com/artnikel/nuclei/internal/config"
@@ -19,15 +18,6 @@ import (
 )
 
 func main() {
-	defer func() {
-		if r := recover(); r != nil {
-			errMsg := fmt.Sprintf("Panic caught: %v\n%s", r, debug.Stack())
-
-			fmt.Println(errMsg)
-
-			walk.MsgBox(nil, "Fatal error", errMsg, walk.MsgBoxIconError)
-		}
-	}()
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -41,6 +31,7 @@ func main() {
 	go func() {
 		for {
 			if security.IsBeingDebugged() {
+				walk.MsgBox(nil, "Security Alert", "Debugging detected. Application will now exit.", walk.MsgBoxIconError)
 				logger.Error.Fatalf("Debug detected. Exiting.")
 				os.Exit(1)
 			}
@@ -48,17 +39,19 @@ func main() {
 		}
 	}()
 
+	licenseClient := license.NewLicenseClient(cfg.License.ServerURL, cfg.License.Key)
+	if err := licenseClient.CheckLicense(); err != nil {
+		walk.MsgBox(nil, "License Error", fmt.Sprintf("License check failed:\n\n%v", err), walk.MsgBoxIconError)
+		logger.Error.Fatalf("Failed to verify license on startup: %v", err)
+		os.Exit(1)
+	}
+
 	go func() {
 		for {
-			cfg, err := config.LoadConfig("config.yaml")
-			if err != nil {
-				logger.Error.Fatalf("Failed to load config: %v", err)
-			}
-			lc := license.NewLicenseClient(cfg.License.ServerURL, cfg.License.Key)
 			time.Sleep(constants.DayTimeout)
-
-			if err := lc.CheckLicense(); err != nil {
-				logger.Error.Fatalf("Failed to verify the license: %v", err)
+			if err := licenseClient.CheckLicense(); err != nil {
+				walk.MsgBox(nil, "License Error", fmt.Sprintf("License check failed:\n\n%v", err), walk.MsgBoxIconError)
+				logger.Error.Fatalf("License check failed: %v", err)
 				os.Exit(1)
 			}
 		}
@@ -78,7 +71,7 @@ func main() {
 
 	// Create settings section
 	settingsPage, settingsPageWidget := gui.BuildSettingsSection()
-	
+
 	if err := (MainWindow{
 		AssignTo: &mw,
 		Title:    "Nuclei 3.0 GUI Scanner",
